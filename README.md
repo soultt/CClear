@@ -7,6 +7,7 @@
 后端是 FastAPI，只监听 `127.0.0.1`，不对外暴露。
 
 > **仓库地址**：<https://github.com/soultt/CClear> ·
+> 下载预编译版本 <https://github.com/soultt/CClear/releases/latest> ·
 > 问题反馈 <https://github.com/soultt/CClear/issues> ·
 > 更新说明 <https://github.com/soultt/CClear/releases>
 > 应用内的「关于」页面也提供同样的入口，点击后一律用系统默认浏览器打开。
@@ -35,6 +36,11 @@
 * **只监听回环地址**：Web 服务不对外网开放。
 
 ## 🚀 运行
+
+### 直接下载（推荐）
+
+不需要 Python：从 [Releases](https://github.com/soultt/CClear/releases/latest) 下载 `CClear.exe`
+（单文件、免安装），双击即可运行。
 
 ### 环境要求
 * Windows 10 / 11（64 位）
@@ -92,6 +98,7 @@ build-exe.bat
 
 产物：`dist\CClear.exe`
 
+* 预编译版本已发布在 [Releases](https://github.com/soultt/CClear/releases/latest)，无需自行打包。
 * 单文件、无控制台窗口，双击即用，自带应用图标 `app/web/CClear.ico`。
 * 内嵌 WebView2 界面，**不会打开浏览器**；约 40–60 MB（含 pythonnet / WebView2 桥接层）。
 * 可脱离 Python 运行；需要管理员权限时右键“以管理员身份运行”。
