@@ -9,6 +9,7 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const PAGE_META = {
   overview: ['总览', '磁盘概况与一键优化'],
   cleaner: ['垃圾清理', '临时文件 / 缓存 / 回收站清理'],
+  registry: ['注册表清理', '失效项扫描 · 安全分级 · 备份后清理'],
   large: ['大文件转移', '定位大文件并迁移到其他磁盘'],
   dir: ['目录迁移', '目录搬家 · 联接 · 注册表同步'],
   apps: ['应用迁移', '已安装程序整体迁移'],
@@ -24,6 +25,8 @@ const state = {
   targets: [],
   junk: { cats: [], sel: new Set(), sizes: {} },
   junkGroup: '全部',
+  reg: { cats: [], sel: new Set() },
+  regLevel: '全部',
   large: { files: [], sel: new Set() },
   apps: { list: [], sel: new Set(), filter: 'all', query: '', running: new Set(), sort: { key: '', dir: 'asc' } },
   journal: [],
@@ -298,6 +301,7 @@ function go(page) {
   if (page === 'apps' && !state.apps.list.length) loadApps();
   if (page === 'settings') fillSettings();
   if (page === 'about') fillAbout();
+  if (page === 'registry') renderReg();
   if (page === 'dir') renderDrivePick(state.target);
 }
 
@@ -341,7 +345,7 @@ function renderOverview() {
   const q = o.quick || {};
   $('#stJunk').textContent = q.total_human || '未扫描';
   $('#navCleanPill').textContent = q.total_human || '–';
-  $('#stJunkHint').textContent = o.last_scan ? `上次扫描 ${timeStr(o.last_scan)}` : '点击“扫描垃圾文件”开始估算';
+  $('#stJunkHint').textContent = o.last_scan ? `上次扫描 ${timeStr(o.last_scan)}` : '勾选项目后点击“扫描选中项”开始估算';
 
   const jn = o.journal || {};
   $('#stFreed').textContent = bytes(jn.freed_bytes || 0);
@@ -427,6 +431,7 @@ const typeLabel = (a) => ({
   move_dir: { text: '目录迁移', cls: 'info' },
   move_file: { text: '文件转移', cls: 'info' },
   clean: { text: '垃圾清理', cls: 'safe' },
+  regclean: { text: '注册表清理', cls: 'violet' },
   delete_files: { text: '删除文件', cls: 'caution' },
 }[a] || { text: a || '操作', cls: 'plain' });
 
@@ -438,47 +443,79 @@ document.addEventListener('click', (e) => {
 /* =========================================================================
    CLEANER
    ========================================================================= */
+const RISK_RANK = { safe: 0, caution: 1, advanced: 2 };
+const RISK_TEXT = { safe: '安全', caution: '注意', advanced: '高级' };
+const RISK_LEVELS = [
+  { key: 'safe', label: '安全', hint: '可直接清理，不影响系统与已安装程序' },
+  { key: 'caution', label: '注意', hint: '可能影响下次启动或需重新下载，请确认后清理' },
+  { key: 'advanced', label: '高级', hint: '涉及系统回退或重建成本较高，建议逐项确认' },
+];
+
+/* Cards are always ordered by safety level (safe → caution → advanced), then
+   by the declared group order, so the riskiest items never appear first. */
+function sortByRisk(list) {
+  return [...list].sort((a, b) => (RISK_RANK[a.risk] ?? 9) - (RISK_RANK[b.risk] ?? 9));
+}
+
 function renderJunk() {
-  const cats = state.junk.cats;
+  const cats = sortByRisk(state.junk.cats);
   const grid = $('#junkGrid');
-  if (!cats.length) { grid.innerHTML = '<div class="empty" style="grid-column:1/-1">暂无清理项</div>'; return; }
+  if (!cats.length) { grid.innerHTML = '<div class="empty">暂无清理项</div>'; return; }
   const list = state.junkGroup === '全部' ? cats : cats.filter((c) => c.group === state.junkGroup);
-  grid.innerHTML = list.map((c) => {
-    const on = state.junk.sel.has(c.id);
-    const size = state.junk.sizes[c.id];
-    const locked = c.admin && !state.overview.admin;
-    const items = (c.items || []).slice(0, 6);
-    return `<div class="junk-card ${on ? 'on' : ''} ${locked ? 'locked' : ''}" data-cat="${c.id}">
-      <div class="junk-top">
-        <div class="junk-icon">${icon(catIcon(c.icon), 'width:18px;height:18px')}</div>
-        <div style="flex:1;min-width:0">
-          <div class="junk-name">${esc(c.name)}
-            <span class="badge ${c.risk}">${c.risk === 'safe' ? '安全' : c.risk === 'caution' ? '注意' : '高级'}</span>
-            ${c.admin ? `<span class="badge plain" title="需要管理员权限">${icon('lock', 'width:11px;height:11px')}管理员</span>` : ''}
-          </div>
-          ${items.length ? `<div class="junk-items">${items.map((i) => `<div title="${esc(i.path)}">${esc(i.path)}</div>`).join('')}</div>` : ''}
-        </div>
-        <span class="check ${on ? 'on' : ''}" data-toggle="${c.id}"></span>
+  if (!list.length) { grid.innerHTML = '<div class="empty">该分组下暂无清理项</div>'; updateCleanButton(); return; }
+  grid.innerHTML = RISK_LEVELS.map((lv) => {
+    const items = list.filter((c) => c.risk === lv.key);
+    if (!items.length) return '';
+    const scannedItems = items.filter((c) => state.junk.sizes[c.id] !== undefined);
+    const total = scannedItems.reduce((a, c) => a + (state.junk.sizes[c.id] || 0), 0);
+    return `<div class="risk-group">
+      <div class="risk-group-head">
+        <span class="dot ${lv.key}"></span>
+        <span class="lv ${lv.key}">${lv.label}</span>
+        <span class="cnt">${items.length} 项${scannedItems.length ? ` · 已扫描 ${scannedItems.length} 项 · ${bytes(total)}` : ''}</span>
+        <span class="hint">${lv.hint}</span>
       </div>
-      <div class="junk-desc">${esc(c.desc)}</div>
-      <div class="junk-meta">
-        <div class="junk-size ${size ? '' : 'zero'}">${size === undefined ? '待扫描' : bytes(size)}</div>
-        <div class="spacer"></div>
-        <span class="badge plain">${c.group}</span>
-      </div>
+      <div class="junk-grid">${items.map(junkCard).join('')}</div>
     </div>`;
-  }).join('');
+  }).filter(Boolean).join('');
   updateCleanButton();
+}
+
+function junkCard(c) {
+  const on = state.junk.sel.has(c.id);
+  const size = state.junk.sizes[c.id];
+  const locked = c.admin && !state.overview.admin;
+  const items = (c.items || []).slice(0, 6);
+  return `<div class="junk-card ${on ? 'on' : ''} ${locked ? 'locked' : ''}" data-cat="${c.id}">
+    <div class="junk-top">
+      <div class="junk-icon">${icon(catIcon(c.icon), 'width:18px;height:18px')}</div>
+      <div style="flex:1;min-width:0">
+        <div class="junk-name">${esc(c.name)}
+          <span class="badge ${c.risk}">${RISK_TEXT[c.risk] || c.risk}</span>
+          ${c.admin ? `<span class="badge plain" title="需要管理员权限">${icon('lock', 'width:11px;height:11px')}管理员</span>` : ''}
+        </div>
+        ${items.length ? `<div class="junk-items">${items.map((i) => `<div title="${esc(i.path)}">${esc(i.path)}</div>`).join('')}</div>` : ''}
+      </div>
+      <span class="check ${on ? 'on' : ''}" data-toggle="${c.id}"></span>
+    </div>
+    <div class="junk-desc">${esc(c.desc)}</div>
+    <div class="junk-meta">
+      <div class="junk-size ${size ? '' : 'zero'}">${size === undefined ? '待扫描' : bytes(size)}</div>
+      <div class="spacer"></div>
+      <span class="badge plain">${c.group}</span>
+    </div>
+  </div>`;
 }
 
 const catIcon = (i) => ({ temp: 'folder', bug: 'alert', image: 'chart', update: 'refresh', windows: 'disk', log: 'file', speed: 'play', recycle: 'undo', history: 'history', globe: 'open', chrome: 'app', edge: 'app', firefox: 'app', code: 'package', package: 'package', trash: 'trash' }[i] || 'trash');
 
 function updateCleanButton() {
-  const n = state.junk.sel.size;
-  const size = [...state.junk.sel].reduce((a, id) => a + (state.junk.sizes[id] || 0), 0);
+  const ids = [...state.junk.sel];
+  const size = ids.reduce((a, id) => a + (state.junk.sizes[id] || 0), 0);
+  const scanned = ids.filter((id) => state.junk.sizes[id] !== undefined).length;
   const btn = $('#btnJunkClean');
-  btn.disabled = n === 0;
-  btn.innerHTML = `${icon('broom')}清理选中项${n ? `（${n} 项 · ${bytes(size)}）` : ''}`;
+  btn.disabled = ids.length === 0;
+  btn.innerHTML = `${icon('broom')}清理选中项${ids.length ? `（${ids.length} 项${scanned ? ` · ${bytes(size)}` : ' · 未扫描'}）` : ''}`;
 }
 
 $('#junkGrid').addEventListener('click', (e) => {
@@ -512,26 +549,43 @@ $('#btnSelectAll').onclick = () => {
 $('#btnSelectNone').onclick = () => { state.junk.sel.clear(); renderJunk(); };
 $('#btnSelectSafe').onclick = () => {
   state.junk.sel.clear();
-  state.junk.cats.filter((c) => c.risk === 'safe').forEach((c) => state.junk.sel.add(c.id));
+  state.junk.cats
+    .filter((c) => c.risk === 'safe' && !(c.admin && !state.overview.admin))
+    .forEach((c) => state.junk.sel.add(c.id));
   renderJunk();
-  toast('已选择安全项', `共 ${state.junk.sel.size} 项，不含“注意/高级”类别`, 'ok');
+  const blocked = state.junk.cats.filter((c) => c.risk === 'safe' && c.admin && !state.overview.admin).length;
+  toast('已选择安全项',
+    `共 ${state.junk.sel.size} 项，不含“注意/高级”类别${blocked ? `；另有 ${blocked} 项需要管理员权限，未选中` : ''}`,
+    'ok');
 };
 
-$('#btnJunkScan').onclick = async () => {
-  const ids = state.junk.cats.length ? state.junk.cats.map((c) => c.id) : Object.keys(state.junk.sizes);
+$('#btnJunkScan').onclick = () => {
+  // Scan only what the user ticked - an unchecked card is never analysed.
+  const ids = [...state.junk.sel];
+  if (!ids.length) {
+    toast('请先选择项目', '勾选要扫描的清理项目（默认已选中安全项），再点击“扫描选中项”。', 'warn');
+    return;
+  }
+  return scanJunk(ids);
+};
+
+async function scanJunk(ids) {
   await runJob('/api/junk/scan', { ids }, '扫描垃圾文件', {
     onDone: (j) => {
       if (j.status !== 'done') return;
       const res = j.result || {};
+      const byId = new Map((res.categories || []).map((c) => [c.id, c]));
+      // Only the ticked projects were scanned; keep the rest as they were.
       state.junk.sizes = {};
-      (res.categories || []).forEach((c) => { state.junk.sizes[c.id] = c.size; });
-      state.junk.cats = (res.categories || []).map((c) => ({ ...(state.junk.cats.find((x) => x.id === c.id) || {}), ...c }));
-      state.overview.quick = { total: res.total, total_human: res.total_human };
+      state.junk.cats = state.junk.cats.map((c) => (byId.has(c.id) ? { ...c, ...byId.get(c.id) } : c));
+      state.junk.cats.forEach((c) => { if (byId.has(c.id)) state.junk.sizes[c.id] = c.size; });
+      const scannedTotal = (res.categories || []).reduce((a, c) => a + (c.size || 0), 0);
+      state.overview.quick = { total: scannedTotal, total_human: res.total_human };
       $('#stJunk').textContent = res.total_human;
       $('#navCleanPill').textContent = res.total_human;
-      $('#stJunkHint').textContent = `刚刚扫描 · ${(res.categories || []).length} 个类别`;
+      $('#stJunkHint').textContent = `已扫描 ${ids.length} 个项目${ids.length < state.junk.cats.length ? ' · 部分结果' : ''}`;
       renderJunk();
-      toast('扫描完成', `共发现 ${res.total_human} 可清理内容`, 'ok');
+      toast('扫描完成', `已扫描 ${ids.length} 个项目，共发现 ${res.total_human} 可清理内容`, 'ok');
     },
   });
 };
@@ -549,10 +603,12 @@ $('#btnJunkClean').onclick = () => {
   let body = `<div>即将清理 <b>${ids.length}</b> 个类别，预计释放 <b>${bytes(size)}</b>。</div>`;
   body += `<ul style="margin:12px 0 0 18px;line-height:1.9">${ids.map((id) => {
     const c = state.junk.cats.find((x) => x.id === id) || {};
-    return `<li>${esc(c.name || id)}${c.risk !== 'safe' ? ' <span class="badge caution">注意</span>' : ''}</li>`;
+    return `<li>${esc(c.name || id)}${c.risk !== 'safe' ? ` <span class="badge ${c.risk}">${RISK_TEXT[c.risk] || c.risk}</span>` : ''}</li>`;
   }).join('')}</ul>`;
   if (risky.length && state.junk.sel.has('recycle_bin')) body += `<div class="note warn" style="margin-top:12px">${icon('alert', 'width:15px')}<div>包含回收站，清空后文件将无法恢复。</div></div>`;
   if (adminNeeded.length && !state.overview.admin) body += `<div class="note warn" style="margin-top:12px">${icon('lock', 'width:15px')}<div>其中 ${adminNeeded.length} 项需要管理员权限，普通权限下无法执行：请先点击右上角「获取管理员权限」，UAC 确认后本程序会以管理员身份重新启动，再执行即可。</div></div>`;
+  const unscanned = ids.filter((id) => state.junk.sizes[id] === undefined);
+  if (unscanned.length) body += `<div class="note warn" style="margin-top:12px">${icon('info', 'width:15px')}<div>其中 ${unscanned.length} 项尚未扫描，将按清理规则直接处理，释放大小未计入上方估算。</div></div>`;
   confirmModal({
     title: '确认清理所选项目？', body, confirmText: '开始清理', danger: true,
     onConfirm: async () => {
@@ -570,7 +626,190 @@ $('#btnJunkClean').onclick = () => {
             toast('清理完成', `释放 ${r.freed_human}，删除 ${r.removed} 项，跳过 ${r.skipped} 项`, 'ok', 7000);
           }
           state.junk.sel.clear();
-          $('#btnJunkScan').click();
+          scanJunk(ids);
+          loadOverview();
+        },
+      });
+    },
+  });
+};
+
+/* =========================================================================
+   REGISTRY CLEANER
+   ========================================================================= */
+const REG_HINTS = {
+  safe: '失效的启动项、应用路径与隐私记录，可直接清理',
+  caution: '会删除卸载信息，请先确认对应程序确实已卸载',
+  advanced: '涉及 COM 组件注册，建议保留备份一段时间',
+};
+
+function regCat(id) { return state.reg.cats.find((c) => c.id === id) || {}; }
+
+function renderReg() {
+  const grid = $('#regGrid');
+  const cats = state.reg.cats;
+  if (!cats.length) {
+    grid.innerHTML = '<div class="empty">点击“扫描选中项”检查注册表残留</div>';
+    updateRegButton();
+    return;
+  }
+  const levels = RISK_LEVELS
+    .filter((lv) => state.regLevel === '全部' || state.regLevel === lv.key)
+    .map((lv) => {
+      const list = cats.filter((c) => c.risk === lv.key);
+      if (!list.length) return '';
+      const total = list.reduce((a, c) => a + (c.count || 0), 0);
+      const scannedCount = list.filter((c) => c.scanned).length;
+      return `<div class="risk-group">
+        <div class="risk-group-head">
+          <span class="dot ${lv.key}"></span>
+          <span class="lv ${lv.key}">${lv.label}</span>
+          <span class="cnt">${list.length} 组${scannedCount ? ` · 已扫描 ${scannedCount} 组 · ${total} 项` : ''}</span>
+          <span class="hint">${REG_HINTS[lv.key] || lv.hint}</span>
+        </div>
+        ${list.map(regCard).join('')}
+      </div>`;
+    }).filter(Boolean).join('');
+  grid.innerHTML = levels || '<div class="empty">该安全等级下暂无项目</div>';
+  updateRegButton();
+}
+
+function regCard(c) {
+  const on = state.reg.sel.has(c.id);
+  const locked = c.admin && !state.overview.admin;
+  const scanned = !!c.scanned;
+  const count = scanned ? (c.count || 0) : null;
+  const items = scanned ? (c.items || []).slice(0, 6) : [];
+  return `<div class="reg-card ${on ? 'on' : ''} ${locked ? 'locked' : ''}" data-reg="${c.id}">
+    <div class="reg-card-top">
+      <span class="check ${on ? 'on' : ''}"></span>
+      <span class="name">${esc(c.name)}</span>
+      <span class="badge ${c.risk}">${RISK_TEXT[c.risk] || c.risk}</span>
+      ${c.admin ? `<span class="badge plain" title="需要管理员权限">${icon('lock', 'width:11px;height:11px')}管理员</span>` : ''}
+      <span class="num">${count === null ? '待扫描' : `${count} 项`}</span>
+    </div>
+    <div class="reg-card-desc">${esc(c.desc)}</div>
+    ${items.length ? `<div class="reg-items">${items.map((i) => `
+      <div class="reg-item" title="${esc(i.key)}${i.target ? `\n${esc(i.target)}` : ''}">
+        <span class="k">${esc(i.label)}</span><span class="t">${esc(i.issue)}${i.target ? ` · ${esc(shortPath(i.target, 26, 26))}` : ''}</span>
+      </div>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+function updateRegButton() {
+  const ids = [...state.reg.sel];
+  const ready = ids.filter((id) => { const c = regCat(id); return c.scanned && c.count; });
+  const items = ready.reduce((a, id) => a + (regCat(id).count || 0), 0);
+  const btn = $('#btnRegClean');
+  btn.disabled = ready.length === 0;
+  btn.innerHTML = `${icon('shield')}清理选中项${ready.length ? `（${ready.length} 组 · ${items} 项）` : ''}`;
+}
+
+$('#regGrid').addEventListener('click', (e) => {
+  const card = e.target.closest('[data-reg]');
+  if (!card) return;
+  const id = card.dataset.reg;
+  const cat = regCat(id);
+  if (cat.admin && !state.overview.admin) {
+    toast('需要管理员权限', `“${cat.name}”需要管理员权限：请点击右上角「获取管理员权限」，在 UAC 提示中确认后会以管理员身份重新启动（本窗口会自动关闭）。`, 'warn', 9000);
+    return;
+  }
+  if (state.reg.sel.has(id)) state.reg.sel.delete(id); else state.reg.sel.add(id);
+  card.classList.toggle('on', state.reg.sel.has(id));
+  const chk = $('.check', card); if (chk) chk.classList.toggle('on', state.reg.sel.has(id));
+  updateRegButton();
+});
+
+$$('[data-reglevel]').forEach((chip) => chip.addEventListener('click', () => {
+  $$('[data-reglevel]').forEach((c) => c.classList.remove('on'));
+  chip.classList.add('on');
+  state.regLevel = chip.dataset.reglevel;
+  renderReg();
+}));
+
+$('#btnRegSelectAll').onclick = () => {
+  state.reg.sel.clear();
+  state.reg.cats.forEach((c) => { if (!(c.admin && !state.overview.admin)) state.reg.sel.add(c.id); });
+  renderReg();
+};
+$('#btnRegSelectNone').onclick = () => { state.reg.sel.clear(); renderReg(); };
+$('#btnRegSelectSafe').onclick = () => {
+  state.reg.sel.clear();
+  state.reg.cats
+    .filter((c) => c.risk === 'safe' && !(c.admin && !state.overview.admin))
+    .forEach((c) => state.reg.sel.add(c.id));
+  renderReg();
+  const blocked = state.reg.cats.filter((c) => c.risk === 'safe' && c.admin && !state.overview.admin).length;
+  toast('已选择安全项',
+    `共 ${state.reg.sel.size} 组，不含“注意/高级”类别${blocked ? `；另有 ${blocked} 组需要管理员权限，未选中` : ''}`,
+    'ok');
+};
+
+$('#btnRegScan').onclick = () => {
+  // Only the ticked projects are inspected; the rest stay "待扫描".
+  const ids = [...state.reg.sel];
+  if (!ids.length) {
+    toast('请先选择项目', '勾选要检查的注册表项目（默认已选中安全项），再点击“扫描选中项”。', 'warn');
+    return;
+  }
+  return scanReg(ids);
+};
+
+async function scanReg(ids) {
+  await runJob('/api/regclean/scan', { ids }, '扫描注册表残留', {
+    onDone: (j) => {
+      if (j.status !== 'done') return;
+      const res = j.result || {};
+      const byId = new Map((res.categories || []).map((c) => [c.id, c]));
+      state.reg.cats = state.reg.cats.map((c) => (byId.has(c.id) ? { ...c, ...byId.get(c.id), scanned: true } : c));
+      renderReg();
+      const found = res.total || 0;
+      $('#navRegPill').textContent = found ? `${found} 项` : '0';
+      $('#regNotice').innerHTML = found
+        ? `<div class="note ok" style="margin-top:12px">${icon('check', 'width:15px')}<div>本次扫描 ${ids.length} 组项目，发现 <b>${found}</b> 项可清理的注册表残留；结果已按安全等级排列。</div></div>`
+        : `<div class="note ok" style="margin-top:12px">${icon('check', 'width:15px')}<div>本次扫描 ${ids.length} 组项目，没有发现注册表残留。</div></div>`;
+      toast('注册表扫描完成', found ? `发现 ${found} 项可清理残留` : '未发现残留', 'ok');
+    },
+  });
+}
+
+$('#btnRegClean').onclick = () => {
+  const ids = [...state.reg.sel].filter((id) => { const c = regCat(id); return c.scanned && c.count; });
+  if (!ids.length) {
+    toast('请先扫描选中项', '清理前需要先扫描，确认要删除的残留数量。', 'info');
+    return;
+  }
+  const items = ids.reduce((a, id) => a + (regCat(id).count || 0), 0);
+  const risky = ids.filter((id) => regCat(id).risk !== 'safe');
+  const adminNeeded = ids.filter((id) => regCat(id).admin);
+  let body = `<div>即将删除 <b>${items}</b> 项注册表残留（${ids.length} 组）。删除前会自动导出这些注册表项。</div>`;
+  body += `<ul style="margin:12px 0 0 18px;line-height:1.9">${ids.map((id) => {
+    const c = regCat(id);
+    return `<li>${esc(c.name || id)} <span class="badge ${c.risk}">${RISK_TEXT[c.risk] || c.risk}</span> · ${c.count || 0} 项</li>`;
+  }).join('')}</ul>`;
+  if (risky.length) body += `<div class="note warn" style="margin-top:12px">${icon('alert', 'width:15px')}<div>包含 ${risky.length} 组“注意/高级”项目。若清理后某个程序出现异常，可在数据目录的注册表备份中导入对应 .reg 文件恢复。</div></div>`;
+  if (adminNeeded.length && !state.overview.admin) body += `<div class="note warn" style="margin-top:12px">${icon('lock', 'width:15px')}<div>其中 ${adminNeeded.length} 组需要管理员权限，普通权限下会被自动跳过：请先点击右上角「获取管理员权限」，UAC 确认后本程序会以管理员身份重新启动，再执行即可。</div></div>`;
+  confirmModal({
+    title: '确认清理注册表残留？', body, confirmText: '备份并清理', danger: true,
+    onConfirm: async () => {
+      await runJob('/api/regclean/clean', { ids }, '清理注册表残留', {
+        onDone: (j) => {
+          if (j.status !== 'done') return;
+          const r = j.result || {};
+          const fails = (r.details || []).filter((d) => d.ok === false);
+          const skipped = r.skipped || 0;
+          if (fails.length) {
+            const reason = (fails[0].message || '').split('\n')[0].slice(0, 70);
+            toast('清理完成，部分未成功',
+              `${fails.length} 项未完成（${fails[0].category || ''}）：${reason}　｜　已删除 ${r.removed} 项`,
+              'warn', 12000);
+          } else {
+            toast('注册表清理完成',
+              `已删除 ${r.removed} 项${skipped ? `，跳过 ${skipped} 组需管理员权限的项目` : ''}；备份位于数据目录的 backups 下`,
+              'ok', 8000);
+          }
+          state.reg.sel.clear();
+          scanReg(ids);
           loadOverview();
         },
       });
@@ -1492,15 +1731,33 @@ $('#btnHotspots').onclick = async () => {
 };
 /* the job bar's own buttons are bound per row in ensureJobRow() */
 
+/* Default selection = every "safe" project (skip admin-only ones when the app
+   is not elevated). Called once on boot, so a later scan only touches what the
+   user can see ticked. */
+function selectSafeDefaults() {
+  state.junk.sel.clear();
+  state.junk.cats
+    .filter((c) => c.risk === 'safe' && !(c.admin && !state.overview.admin))
+    .forEach((c) => state.junk.sel.add(c.id));
+  state.reg.sel.clear();
+  state.reg.cats
+    .filter((c) => c.risk === 'safe' && !(c.admin && !state.overview.admin))
+    .forEach((c) => state.reg.sel.add(c.id));
+}
+
 /* =========================================================================
    boot
    ========================================================================= */
 (async function boot() {
   const res = await api('/api/junk/categories').catch(() => null);
   if (res) state.junk.cats = res.categories;
+  const reg = await api('/api/regclean/categories').catch(() => null);
+  if (reg) state.reg.cats = reg.categories;
   renderDirQuick();
   await loadOverview();
+  selectSafeDefaults();
   renderJunk();
+  renderReg();
   updateSteps(1);
   if (!state.overview.admin) {
     toast('未获得管理员权限', '清理系统缓存、创建符号链接等功能需要管理员权限，可点击右上角按钮提升。', 'warn', 9000);

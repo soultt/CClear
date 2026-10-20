@@ -83,6 +83,36 @@ print("\n[2] 垃圾扫描与清理任务")
 j = wait_job(call("/api/junk/scan", {"ids": ["user_temp", "thumbs"]})["job_id"])
 check("垃圾扫描任务完成", j["status"] == "done", f"{j['result']['total_human']}")
 check("扫描结果含分类", len(j["result"]["categories"]) == 2)
+check("扫描只覆盖所选项目",
+      {c["id"] for c in j["result"]["categories"]} == {"user_temp", "thumbs"})
+jmeta = call("/api/junk/categories")
+_jr = [c["risk"] for c in jmeta["categories"]]
+check("垃圾项目按安全等级排序",
+      _jr == sorted(_jr, key=lambda r: {"safe": 0, "caution": 1, "advanced": 2}[r]), _jr)
+
+print("\n[2b] 注册表清理分类与扫描")
+rc = call("/api/regclean/categories")
+check("GET /api/regclean/categories", len(rc["categories"]) >= 6)
+risks = [c["risk"] for c in rc["categories"]]
+check("分类按安全等级排序", risks == sorted(risks, key=lambda r: {"safe": 0, "caution": 1, "advanced": 2}[r]), risks)
+check("每个分类都有等级与说明",
+      all(c["risk"] in ("safe", "caution", "advanced") and c["desc"] for c in rc["categories"]))
+rj = wait_job(call("/api/regclean/scan", {"ids": ["reg_mru", "reg_startup_user"]})["job_id"])
+check("注册表扫描任务完成", rj["status"] == "done", f"{rj['result']['total']} 项")
+check("扫描结果按等级排序",
+      [c["risk"] for c in rj["result"]["categories"]] ==
+      sorted([c["risk"] for c in rj["result"]["categories"]],
+             key=lambda r: {"safe": 0, "caution": 1, "advanced": 2}[r]))
+check("注册表扫描只覆盖所选项目",
+      {c["id"] for c in rj["result"]["categories"]} == {"reg_mru", "reg_startup_user"},
+      [c["id"] for c in rj["result"]["categories"]])
+check("扫描项含路径与原因",
+      all({"key", "issue", "label"} <= set(i) for c in rj["result"]["categories"] for i in c["items"]))
+try:
+    call("/api/regclean/clean", {"ids": []})
+    check("拒绝空注册表清理请求", False)
+except urllib.error.HTTPError as e:
+    check("拒绝空注册表清理请求", e.code == 400)
 
 print("\n[3] 大文件扫描任务")
 j = wait_job(call("/api/files/scan", {"min_mb": 500})["job_id"], timeout=900,

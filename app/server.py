@@ -18,7 +18,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .core import appmover, cleaner, journal, mover, registry, scanner, winutil
+from .core import appmover, cleaner, journal, mover, regclean, registry, scanner, winutil
 from .core.jobs import JobManager
 from .core.util import expand, human_size, is_reparse_point, long_path
 from . import __version__
@@ -44,7 +44,7 @@ DEFAULT_SETTINGS = {
 }
 
 jobs = JobManager()
-app = FastAPI(title="CClear", version="1.1.1")
+app = FastAPI(title="CClear", version="1.2.0")
 _cache: dict[str, Any] = {}
 
 # Elevation hand-over: the launcher registers a callback so that a successful
@@ -421,6 +421,61 @@ def junk_preview(payload: dict = Body(...)) -> dict:
         if procs:
             block.append({"id": cid, "name": cat["name"], "processes": procs})
     return {"blocking": block, "admin": winutil.is_admin()}
+
+
+# ---------------------------------------------------------------------------
+# registry cleaner
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/regclean/categories")
+def regclean_categories() -> dict:
+    """Registry junk categories, ordered by safety level (safe → caution → advanced)."""
+    return {"categories": regclean.category_meta(), "admin": winutil.is_admin()}
+
+
+@app.post("/api/regclean/scan")
+def regclean_scan(payload: dict = Body(default={})) -> dict:
+    ids = payload.get("ids") or None
+
+    def task(job):
+        res = regclean.scan(
+            ids,
+            report=lambda p, m: job.progress(p, m),
+            cancel=lambda: job.cancelled,
+        )
+        _cache["regclean"] = {"total": res["total"],
+                              "categories": res["categories"],
+                              "time": time.time()}
+        job.progress(100, f"扫描完成，发现 {res['total']} 项注册表残留")
+        return res
+
+    j = jobs.run("regclean-scan", task, "扫描注册表残留")
+    return {"job_id": j.id}
+
+
+@app.post("/api/regclean/clean")
+def regclean_clean(payload: dict = Body(...)) -> dict:
+    ids = payload.get("ids") or []
+    if not ids:
+        raise HTTPException(400, "请至少选择一个注册表清理项")
+
+    def task(job):
+        res = regclean.clean(ids, report=lambda p, m: job.progress(p, m),
+                             cancel=lambda: job.cancelled)
+        journal.add({
+            "action": "regclean",
+            "label": f"清理注册表 {len(ids)} 组（删除 {res['removed']} 项）",
+            "categories": ids,
+            "removed": res["removed"],
+            "status": "done",
+        })
+        _cache.pop("regclean", None)
+        job.progress(100, f"清理完成，删除 {res['removed']} 项")
+        return res
+
+    j = jobs.run("regclean-clean", task, "清理注册表残留")
+    return {"job_id": j.id}
 
 
 # ---------------------------------------------------------------------------

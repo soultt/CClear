@@ -79,6 +79,7 @@
     <div class="nav-label">空间治理</div>
     <div class="nav-item active" data-page="overview"><svg><use href="#i-dash"/></svg><span>总览</span></div>
     <div class="nav-item" data-page="cleaner"><svg><use href="#i-broom"/></svg><span>垃圾清理</span><span class="pill" id="navCleanPill">–</span></div>
+    <div class="nav-item" data-page="registry"><svg><use href="#i-shield"/></svg><span>注册表清理</span><span class="pill" id="navRegPill">–</span></div>
     <div class="nav-item" data-page="large"><svg><use href="#i-file"/></svg><span>大文件转移</span></div>
     <div class="nav-item" data-page="dir"><svg><use href="#i-folder-move"/></svg><span>目录迁移</span></div>
     <div class="nav-item" data-page="apps"><svg><use href="#i-app"/></svg><span>应用迁移</span></div>
@@ -173,7 +174,7 @@
       <section class="page" id="page-cleaner">
         <div class="card">
           <div class="card-head">
-            <div><h3>垃圾与缓存清理</h3><div class="sub">扫描临时文件、系统缓存、浏览器缓存等，清理前请确认没有正在运行的安装程序。</div></div>
+            <div><h3>垃圾与缓存清理</h3><div class="sub">清理项目按「安全 → 注意 → 高级」排列，默认勾选安全项；扫描只检查已勾选的项目，清理前请确认没有正在运行的安装程序。</div></div>
             <div class="right">
               <button class="btn sm" id="btnSelectSafe">仅选安全项</button>
               <button class="btn sm" id="btnSelectAll">全选</button>
@@ -188,11 +189,40 @@
             <div class="chip" data-group="浏览器">浏览器</div>
             <div class="chip" data-group="开发缓存">开发缓存</div>
             <div class="spacer"></div>
-            <button class="btn" id="btnJunkScan"><svg><use href="#i-refresh"/></svg>扫描</button>
+            <button class="btn" id="btnJunkScan"><svg><use href="#i-search"/></svg>扫描选中项</button>
             <button class="btn primary" id="btnJunkClean" disabled><svg><use href="#i-broom"/></svg>清理选中项</button>
           </div>
           <div id="junkNotice"></div>
-          <div class="junk-grid" id="junkGrid"><div class="empty" style="grid-column:1/-1">点击右上角“扫描”开始分析可清理内容</div></div>
+          <div id="junkGrid"><div class="empty">点击“扫描选中项”开始分析可清理内容（默认已勾选安全项）</div></div>
+        </div>
+      </section>
+
+      <!-- ================= 注册表清理 ================= -->
+      <section class="page" id="page-registry">
+        <div class="card">
+          <div class="card-head">
+            <div><h3>注册表清理</h3><div class="sub">只列出指向已不存在文件的注册表残留；清理项目按安全等级排列，清理前会自动导出备份。</div></div>
+            <div class="right">
+              <button class="btn sm" id="btnRegSelectSafe">仅选安全项</button>
+              <button class="btn sm" id="btnRegSelectAll">全选</button>
+              <button class="btn sm" id="btnRegSelectNone">清空</button>
+            </div>
+          </div>
+          <div class="row" style="margin-bottom:14px">
+            <div class="chip on" data-reglevel="全部">全部</div>
+            <div class="chip" data-reglevel="safe"><span class="dot safe"></span>安全</div>
+            <div class="chip" data-reglevel="caution"><span class="dot caution"></span>注意</div>
+            <div class="chip" data-reglevel="advanced"><span class="dot advanced"></span>高级</div>
+            <div class="spacer"></div>
+            <button class="btn" id="btnRegScan"><svg><use href="#i-search"/></svg>扫描选中项</button>
+            <button class="btn primary" id="btnRegClean" disabled><svg><use href="#i-shield"/></svg>清理选中项</button>
+          </div>
+          <div class="note"><svg style="width:15px"><use href="#i-info"/></svg>
+            <div>安全项只涉及已失效的启动项、应用路径与隐私记录，可直接清理；<b>注意</b>项会删除卸载信息，请先确认程序确实已卸载；
+              <b>高级</b>项涉及 COM 组件注册，建议保留备份一段时间。扫描只会检查当前勾选的项目。</div>
+          </div>
+          <div id="regNotice"></div>
+          <div id="regGrid" style="margin-top:14px"><div class="empty">点击“扫描选中项”检查注册表残留</div></div>
         </div>
       </section>
 

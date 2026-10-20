@@ -200,6 +200,15 @@ CATEGORIES: list[dict] = [
 
 CATEGORY_INDEX = {c["id"]: c for c in CATEGORIES}
 
+# Safety ranking used to order the cleaner cards: safe items first, then the
+# ones that need a second look, then the advanced/irreversible ones.
+RISK_ORDER = {"safe": 0, "caution": 1, "advanced": 2}
+
+
+def ordered_categories() -> list[dict]:
+    """Categories sorted by safety level (stable: group order within a level)."""
+    return sorted(CATEGORIES, key=lambda c: RISK_ORDER.get(c["risk"], 9))
+
 
 # ---------------------------------------------------------------------------
 # Resolution helpers
@@ -264,7 +273,11 @@ def scan(
     report: Optional[Callable[[float, str], None]] = None,
     cancel: Optional[Callable[[], bool]] = None,
 ) -> dict:
-    cats = [CATEGORY_INDEX[i] for i in ids if i in CATEGORY_INDEX] if ids else CATEGORIES
+    if ids:
+        wanted = [i for i in ids if i in CATEGORY_INDEX]
+        cats = [c for c in ordered_categories() if c["id"] in wanted]
+    else:
+        cats = ordered_categories()
     results = []
     total = 0
     for i, cat in enumerate(cats):
@@ -320,7 +333,8 @@ def scan(
         total += size
         if report:
             report(((i + 1) / max(1, len(cats))) * 100, f"已分析：{cat['name']}")
-    results.sort(key=lambda r: -r["size"])
+    # Keep the safety ordering; within a level show the biggest win first.
+    results.sort(key=lambda r: (RISK_ORDER.get(r["risk"], 9), -r["size"]))
     return {"categories": results, "total": total, "total_human": human_size(total)}
 
 
@@ -335,7 +349,8 @@ def clean(
     report: Optional[Callable[[float, str], None]] = None,
     cancel: Optional[Callable[[], bool]] = None,
 ) -> dict:
-    cats = [CATEGORY_INDEX[i] for i in ids if i in CATEGORY_INDEX]
+    wanted = [i for i in ids if i in CATEGORY_INDEX]
+    cats = [c for c in ordered_categories() if c["id"] in wanted]
     freed = 0
     removed = 0
     skipped = 0
@@ -680,5 +695,5 @@ def category_meta() -> list[dict]:
             "icon": c["icon"], "risk": c["risk"], "admin": c["admin"],
             "default": c["default"], "processes": c["processes"],
         }
-        for c in CATEGORIES
+        for c in ordered_categories()
     ]

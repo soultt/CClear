@@ -375,6 +375,44 @@ th.sortable.sorted .sarrow { opacity: 1; color: var(--accent); }
 .junk-items div { padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ==========================================================================
+   Safety-level sections (shared by the cleaner and registry pages)
+   ========================================================================== */
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: 1px; }
+.dot.safe { background: var(--success); }
+.dot.caution { background: var(--warn); }
+.dot.advanced { background: #f87171; }
+
+.risk-group + .risk-group { margin-top: 18px; }
+.risk-group-head {
+  display: flex; align-items: center; gap: 9px; margin-bottom: 10px;
+  padding-bottom: 8px; border-bottom: 1px dashed var(--border-soft);
+}
+.risk-group-head .lv { font-size: 12.5px; font-weight: 700; letter-spacing: .4px; }
+.risk-group-head .lv.safe { color: var(--success); }
+.risk-group-head .lv.caution { color: var(--warn); }
+.risk-group-head .lv.advanced { color: #ff9c9c; }
+.risk-group-head .cnt { font-size: 12px; color: var(--text-mute); }
+.risk-group-head .hint { margin-left: auto; font-size: 11.5px; color: var(--text-dim); }
+
+.reg-card {
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--panel); padding: 12px 14px; transition: border-color .15s, background .15s;
+}
+.reg-card + .reg-card { margin-top: 8px; }
+.reg-card:hover { border-color: #2b3d59; }
+.reg-card.on { border-color: rgba(77, 141, 255, .55); background: linear-gradient(180deg, rgba(77, 141, 255, .09), rgba(19, 25, 38, .82)); }
+.reg-card.locked { opacity: .62; }
+.reg-card-top { display: flex; align-items: center; gap: 10px; }
+.reg-card-top .name { font-weight: 600; font-size: 13px; }
+.reg-card-top .num { margin-left: auto; font-variant-numeric: tabular-nums; font-size: 13px; color: var(--text-dim); }
+.reg-card-desc { font-size: 12px; color: var(--text-mute); line-height: 1.55; margin-top: 6px; }
+.reg-items { margin-top: 9px; border-top: 1px dashed var(--border-soft); padding-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+.reg-item { font-size: 11.5px; font-family: var(--mono); color: var(--text-mute); display: flex; gap: 8px; }
+.reg-item .k { color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46%; }
+.reg-item .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .8; }
+.reg-empty { font-size: 12px; color: var(--text-mute); padding: 8px 2px; }
+
+/* ==========================================================================
    Progress / jobs
    ========================================================================== */
 .progress { height: 7px; border-radius: 20px; background: #1a2434; overflow: hidden; }

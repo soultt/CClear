@@ -69,6 +69,14 @@ print(f"  总计 {res['total_human']}，耗时 {time.time()-t0:.1f}s")
 for c in res["categories"]:
     print(f"    - {c['name']:<24} {c['size_human']:>10}  ({c['count']} 个文件)")
 check("垃圾扫描返回结果", len(res["categories"]) == 4)
+check("垃圾扫描结果按安全等级排列",
+      [c["risk"] for c in res["categories"]] ==
+      sorted([c["risk"] for c in res["categories"]], key=lambda r: cleaner.RISK_ORDER[r]))
+check("垃圾清理项目按安全等级排列",
+      [c["risk"] for c in cleaner.category_meta()] ==
+      sorted([c["risk"] for c in cleaner.category_meta()], key=lambda r: cleaner.RISK_ORDER[r]))
+check("扫描只覆盖所选项目",
+      {c["id"] for c in res["categories"]} == {"user_temp", "thumbs", "recent", "crash_dumps"})
 
 section("3. 目录迁移引擎（真实迁移 + 联接 + 注册表）")
 target = targets[0]["letter"]
@@ -142,6 +150,57 @@ try:
     winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\CClearTest")
 except OSError:
     pass
+
+section("5b. 注册表清理（分级 + 备份 + 删除）")
+from app.core import regclean
+
+check("分类按安全等级排序",
+      [c["risk"] for c in regclean.category_meta()] ==
+      sorted([c["risk"] for c in regclean.category_meta()],
+             key=lambda r: regclean.RISK_ORDER[r]))
+check("只包含已知安全等级",
+      {c["risk"] for c in regclean.category_meta()} <= {"safe", "caution", "advanced"})
+check("命令路径解析", regclean.command_target('"C:\\a b\\x.exe" /run') == "C:\\a b\\x.exe"
+      and regclean.command_target("C:\\x.exe -k") == "C:\\x.exe"
+      and regclean.command_target("rundll32.exe foo.dll") == "")
+
+reg_base = r"Software\CClearRegTest"
+with winreg.CreateKey(winreg.HKEY_CURRENT_USER, reg_base + r"\Run") as k:
+    winreg.SetValueEx(k, "GhostApp", 0, winreg.REG_SZ, r"C:\NoSuchDir\ghost.exe")
+    winreg.SetValueEx(k, "RealApp", 0, winreg.REG_SZ, r"C:\Windows\explorer.exe")
+
+
+def _fake_scanner(cancel=None):
+    return [regclean._finding("HKCU", reg_base + r"\Run", "GhostApp",
+                              r"C:\NoSuchDir\ghost.exe", "test", value_name="GhostApp")]
+
+
+fake = regclean._cat(id="zz_test", name="测试项", risk="safe", scanner=_fake_scanner)
+regclean.CATEGORIES.append(fake)
+regclean.CATEGORY_INDEX[fake["id"]] = fake
+try:
+    sres = regclean.scan(["zz_test"])
+    check("扫描发现测试残留", sres["total"] == 1, sres["categories"][0]["items"])
+    check("扫描只覆盖所选项目", [c["id"] for c in sres["categories"]] == ["zz_test"],
+          [c["id"] for c in sres["categories"]])
+    cres = regclean.clean(["zz_test"])
+    check("清理删除测试值", cres["removed"] == 1 and not cres["failed"], cres["details"])
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_base + r"\Run") as k:
+        left = [winreg.EnumValue(k, i)[0] for i in range(winreg.QueryInfoKey(k)[1])]
+    check("保留正常启动项", left == ["RealApp"], left)
+    check("已写入注册表备份", bool(cres["backups"]) and os.path.isdir(cres["backups"][0]))
+    okb, totalb, errsb = registry.restore_backup(cres["backups"][0])
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_base + r"\Run") as k:
+        restored = [winreg.EnumValue(k, i)[0] for i in range(winreg.QueryInfoKey(k)[1])]
+    check("备份可还原被删项", "GhostApp" in restored and okb >= 1, restored)
+finally:
+    regclean.CATEGORIES.remove(fake)
+    regclean.CATEGORY_INDEX.pop(fake["id"], None)
+    for path in (reg_base + r"\Run", reg_base):
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+        except OSError:
+            pass
 
 section("6. 应用枚举")
 apps = appmover.list_apps()

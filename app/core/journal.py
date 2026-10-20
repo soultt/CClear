@@ -95,7 +95,7 @@ def stats() -> dict:
         "active": len(active),
         "reverted": len(migrated) - len(active),
         "freed_bytes": sum(int(r.get("size_bytes") or 0) for r in active),
-        "clean_runs": len([r for r in records if r.get("action") == "clean"]),
+        "clean_runs": len([r for r in records if r.get("action") in ("clean", "regclean")]),
         "cleaned_bytes": sum(int(r.get("size_bytes") or 0)
                              for r in records if r.get("action") == "clean"),
     }
