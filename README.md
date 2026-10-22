@@ -168,6 +168,14 @@ CClear/
   `/api/pick/folder` 接口仍保留（可直接置顶的原生对话框），但界面按钮已不再使用它。原生对话框需要
   后台 PowerShell 进程，速度较慢且依赖窗口层级，仅作为接口备用。
 
+## 💖 赞助
+
+如果这个项目对你有帮助，欢迎请作者喝杯咖啡 ☕
+
+| 微信赞赏 | 支付宝 |
+| :---: | :---: |
+| ![微信赞赏码](http://qiniu.yhbsoul.com/oneblog/qrcode/20200623133519785.jpg) | ![支付宝收款码](http://qiniu.yhbsoul.com/oneblog/qrcode/20200623133521901.jpg) |
+
 ## 📜 License
 
 MIT © 2026 soul yu — 详见 [LICENSE](LICENSE)。
