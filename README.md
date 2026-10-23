@@ -172,9 +172,7 @@ CClear/
 
 如果这个项目对你有帮助，欢迎请作者喝杯咖啡 ☕
 
-| 微信赞赏 | 支付宝 |
-| :---: | :---: |
-| ![微信赞赏码](http://qiniu.yhbsoul.com/oneblog/qrcode/20200623133519785.jpg) | ![支付宝收款码](http://qiniu.yhbsoul.com/oneblog/qrcode/20200623133521901.jpg) |
+[在爱发电赞助](https://afdian.com/a/yhbsoul)
 
 ## 📜 License
 
