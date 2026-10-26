@@ -43,7 +43,7 @@ DEFAULT_SETTINGS = {
 }
 
 jobs = JobManager()
-app = FastAPI(title="CClear", version="1.2.0")
+app = FastAPI(title="CClear", version="1.3.0")
 _cache: dict[str, Any] = {}
 
 # Elevation hand-over: the launcher registers a callback so that a successful
