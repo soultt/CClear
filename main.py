@@ -20,11 +20,9 @@ import socket
 import sys
 import threading
 import time
-import webbrowser
 
 APP_NAME = "CClear"
 APP_TITLE = "CClear · C 盘空间管家"
-APP_ICON = "CClear.ico"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -128,236 +126,6 @@ def wait_for_server(host: str, port: int, timeout: float = 20.0) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# frameless window: the page draws the title bar, so a few native details that
-# normally come from the frame have to be restored by hand
-# ---------------------------------------------------------------------------
-
-GWL_STYLE = -16
-WS_MINIMIZEBOX = 0x00020000
-WS_MAXIMIZEBOX = 0x00010000
-WS_SYSMENU = 0x00080000         # taskbar/Alt+Space system menu
-SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_FRAMECHANGED = 0x0001, 0x0002, 0x0004, 0x0020
-
-# Deliberately *not* WS_THICKFRAME: it would give native edge resizing, but it
-# also makes Windows reserve a non-client frame, and on Win10 that frame is
-# painted in the (light) system theme colour - a white border around a dark app
-# that DWMWA_BORDER_COLOR cannot recolour. The page draws resize grips instead.
-WINDOW_MIN_SIZE = (1040, 700)
-
-
-def _winforms():
-    """(System.Windows.Forms, System.Action) or (None, None) if unavailable."""
-    try:
-        import System.Windows.Forms as WinForms
-        from System import Action
-        return WinForms, Action
-    except Exception:
-        return None, None
-
-
-def _on_ui_thread(form, fn) -> bool:
-    """WinForms state must be touched from its own thread."""
-    _, Action = _winforms()
-    if Action is None:
-        return False
-    try:
-        form.Invoke(Action(fn))
-        return True
-    except Exception as exc:
-        print(f"{APP_NAME}: 界面线程调用失败：{exc}")
-        return False
-
-
-def _user32():
-    """user32 with 64-bit safe signatures for the calls used here."""
-    from ctypes import wintypes
-
-    fn = ctypes.WinDLL("user32", use_last_error=True)
-    fn.GetWindowLongW.argtypes = (wintypes.HWND, ctypes.c_int)
-    fn.GetWindowLongW.restype = ctypes.c_long
-    fn.SetWindowLongW.argtypes = (wintypes.HWND, ctypes.c_int, ctypes.c_long)
-    fn.SetWindowLongW.restype = ctypes.c_long
-    fn.SetWindowPos.argtypes = (wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
-                                ctypes.c_int, ctypes.c_int, ctypes.c_uint)
-    fn.SetWindowPos.restype = ctypes.c_bool
-    return fn
-
-
-def _hwnd(form):
-    """Native handle of a WinForms form as a plain int."""
-    handle = form.Handle
-    try:
-        return int(handle.ToInt64())
-    except AttributeError:
-        return int(handle)
-
-
-def frameless_window_setup(window) -> None:
-    """Give the borderless window back what the removed frame would have owned:
-    the taskbar / Alt+Space system menu and the min-max buttons. Resizing is
-    handled by the page (see the grip handlers in app.js) because a native
-    resize border would paint a light system frame around the dark UI."""
-    if sys.platform != "win32":
-        return
-    WinForms, _ = _winforms()
-    form = getattr(window, "native", None)
-    if WinForms is None or form is None:
-        return
-
-    def _apply() -> None:
-        try:
-            user32 = _user32()
-            hwnd = _hwnd(form)
-            style = user32.GetWindowLongW(hwnd, GWL_STYLE)
-            user32.SetWindowLongW(
-                hwnd, GWL_STYLE,
-                style | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU,
-            )
-            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0,
-                                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)
-        except Exception as exc:  # pragma: no cover - cosmetic only
-            print(f"{APP_NAME}: 窗口样式调整失败：{exc}")
-
-    _on_ui_thread(form, _apply)
-
-
-class WindowBridge:
-    """Exposed to the page as ``window.pywebview.api`` for the custom title bar.
-
-    Only the public methods below become JS calls: pywebview walks every public
-    attribute of this object, and a pywebview Window on a public attribute would
-    drag it through the whole WinForms object graph. Hence ``_window``.
-    """
-
-    def __init__(self) -> None:
-        self._window = None
-        self._maximized = False
-
-    # -- internals ---------------------------------------------------------
-    def _form(self):
-        """The underlying WinForms form (pywebview's ``native``)."""
-        return getattr(self._window, "native", None)
-
-    def _sync(self) -> None:
-        if self._window is None:
-            return
-        try:
-            self._window.evaluate_js(
-                "window.cclearSetMaximized && window.cclearSetMaximized(%s)"
-                % ("true" if self._maximized else "false")
-            )
-        except Exception:
-            pass
-
-    def _set_maximized(self, value: bool) -> None:
-        value = bool(value)
-        if value == self._maximized:
-            return
-        self._maximized = value
-        self._sync()
-
-    def _keep_inside_work_area(self) -> None:
-        """Without this a maximized borderless window would cover the taskbar."""
-        WinForms, _ = _winforms()
-        form = self._form()
-        if WinForms is None or form is None:
-            return
-
-        def _apply() -> None:
-            try:
-                form.MaximizedBounds = WinForms.Screen.FromControl(form).WorkingArea
-            except Exception as exc:  # pragma: no cover - cosmetic only
-                print(f"{APP_NAME}: 设置最大化边界失败：{exc}")
-
-        _on_ui_thread(form, _apply)
-
-    def on_restored(self) -> None:
-        """The window came back from maximized *or* minimized.
-
-        Both routes end in the same place, so this only has to put the title bar
-        button back in sync. The window's own rect is left untouched: there is no
-        resize frame any more, so WinForms has nothing to lose on the way back.
-        """
-        self._set_maximized(False)
-
-    # -- called from the page ---------------------------------------------
-    def minimize(self) -> bool:
-        self._window.minimize()
-        return True
-
-    def toggle_maximize(self) -> bool:
-        target = not self._maximized
-        if target:
-            self._keep_inside_work_area()
-            self._window.maximize()
-        else:
-            self._window.restore()
-        self._set_maximized(target)
-        return target
-
-    def close(self) -> bool:
-        self._window.destroy()
-        return True
-
-    def is_maximized(self) -> bool:
-        return self._maximized
-
-    def get_bounds(self) -> list:
-        """[x, y, width, height, min_width, min_height] in logical pixels."""
-        w = self._window
-        return [w.x, w.y, w.width, w.height, WINDOW_MIN_SIZE[0], WINDOW_MIN_SIZE[1]]
-
-    def set_bounds(self, x, y, width, height) -> bool:
-        """Move/resize in one step - used by the page's resize grips."""
-        x, y = int(round(x)), int(round(y))
-        width, height = int(round(width)), int(round(height))
-        self._window.move(x, y)
-        self._window.resize(width, height)
-        return True
-
-
-def open_window(url: str, icon: str) -> bool:
-    """Show the UI inside an embedded WebView2 window. False when unavailable."""
-    try:
-        import webview
-    except Exception as exc:  # pragma: no cover - depends on the environment
-        print(f"{APP_NAME}: 未安装 pywebview（{exc}）")
-        return False
-
-    from app.server import set_relaunch_hook
-
-    bridge = WindowBridge()
-    try:
-        window = webview.create_window(
-            APP_TITLE,
-            url,
-            width=1360,
-            height=880,
-            min_size=WINDOW_MIN_SIZE,
-            background_color="#0b111c",
-            text_select=True,
-            frameless=True,     # no native title bar: the page draws its own
-            easy_drag=False,    # only .pywebview-drag-region elements move it
-            js_api=bridge,      # window.pywebview.api -> the custom title bar
-        )
-        bridge._window = window
-        # Elevating starts a second (elevated) copy: close this window once it is
-        # up, so only one CClear is left. Cancelling the UAC prompt keeps it open.
-        set_relaunch_hook(window.destroy)
-        window.events.shown += lambda: frameless_window_setup(window)
-        window.events.maximized += lambda: bridge._set_maximized(True)
-        window.events.restored += bridge.on_restored
-        kwargs: dict = {"gui": "edgechromium", "debug": bool(os.environ.get("CCLEAR_DEBUG"))}
-        if os.path.isfile(icon):
-            kwargs["icon"] = icon
-        webview.start(**kwargs)          # blocks until the window is closed
-        return True
-    except Exception as exc:  # pragma: no cover - depends on the environment
-        print(f"{APP_NAME}: 独立窗口启动失败：{type(exc).__name__}: {exc}")
-        return False
-
-
 def run_service(thread: threading.Thread) -> int:
     """Keep the process alive around the background HTTP server."""
     try:
@@ -400,7 +168,7 @@ def main() -> int:
 
     import uvicorn
 
-    from app.server import WEB_DIR, app, set_elevate_args, set_relaunch_hook, set_shutdown_hook
+    from app.server import app, set_elevate_args, set_relaunch_hook, set_shutdown_hook
 
     port = find_port(args.port, args.host)
 
@@ -413,7 +181,6 @@ def main() -> int:
         set_elevate_args(["--no-window", "--port", str(port)])
 
     url = f"http://{args.host}:{port}/"
-    icon = os.path.join(WEB_DIR, APP_ICON)
 
     try:
         os.system("")
@@ -453,22 +220,9 @@ def main() -> int:
         print("  后台服务已就绪（未打开界面）。按 Ctrl+C 退出")
         return run_service(thread)
 
-    ui_ok = os.path.isfile(os.path.join(WEB_DIR, "index.html"))
-
-    if not args.browser and ui_ok and open_window(url, icon):
-        server.should_exit = True
-        thread.join(5)
-        return 0
-
-    if not args.browser and ui_ok:
-        notify("独立窗口无法启动（需要 Microsoft Edge WebView2 运行时），"
-               "已改用系统默认浏览器打开。")
+    # 界面由 Electron 壳负责：本进程始终以纯后台服务模式运行
     set_relaunch_hook(stop_service)
-    if ui_ok:
-        webbrowser.open(url)
-    else:
-        print("  未找到界面文件（app/web 已移除）：以纯后台服务模式运行。")
-    print("  按 Ctrl+C 退出")
+    print("  后台服务已就绪。按 Ctrl+C 退出")
     return run_service(thread)
 
 

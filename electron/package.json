@@ -16,6 +16,7 @@
   "build": {
     "appId": "com.cclear.app",
     "productName": "CClear",
+    "electronLanguages": ["zh-CN", "en-US"],
     "artifactName": "${productName}-Setup-${version}.${ext}",
     "files": [
       "main.js",
