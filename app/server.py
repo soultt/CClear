@@ -2,25 +2,24 @@
 
 from __future__ import annotations
 
-import ctypes
 import json
 import os
 import platform
 import stat
-import subprocess
 import sys
 import threading
 import time
 import webbrowser
 from typing import Any, Callable, Optional
+from urllib.parse import urlsplit
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .core import appmover, cleaner, journal, mover, regclean, registry, scanner, winutil
 from .core.jobs import JobManager
-from .core.util import expand, human_size, is_reparse_point, long_path
+from .core.util import expand, human_size, is_reparse_point, long_path, unique_path
 from . import __version__
 
 BASE_DIR = (
@@ -65,6 +64,54 @@ def set_elevate_args(args: list[str]) -> None:
     """Flags the elevated copy should be started with (e.g. ``--browser``)."""
     global _elevate_args
     _elevate_args = list(args)
+
+
+_shutdown_hook: Optional[Callable[[], None]] = None
+
+
+def set_shutdown_hook(hook: Optional[Callable[[], None]]) -> None:
+    """Register how to stop the HTTP server (wired by the launcher)."""
+    global _shutdown_hook
+    _shutdown_hook = hook
+
+
+# ``/api/shutdown`` must never be reachable from a web page: any site could
+# otherwise POST to localhost while CClear is open. Require a non-simple header
+# (cross-origin JS cannot send one without a CORS preflight, which this app does
+# not answer) and a loopback Host (blocks DNS rebinding).
+_LOOPBACK_NAMES = {"127.0.0.1", "localhost", "::1"}
+
+
+def _url_hostname(value: str, *, has_scheme: bool) -> str:
+    try:
+        parts = urlsplit(value if has_scheme else f"//{value}")
+    except ValueError:
+        return ""
+    return (parts.hostname or "").lower()
+
+
+def _is_local_request(request: Request) -> bool:
+    if request.headers.get("x-cclear-request", "").lower() != "local":
+        return False
+    host = _url_hostname(request.headers.get("host", ""), has_scheme=False)
+    if host not in _LOOPBACK_NAMES:
+        return False
+    origin = request.headers.get("origin", "")
+    if origin and _url_hostname(origin, has_scheme=True) not in _LOOPBACK_NAMES:
+        return False
+    return True
+
+
+@app.post("/api/shutdown")
+def shutdown(request: Request) -> dict:
+    """Stop this backend - the Electron shell uses it to reap stale copies."""
+    if not _is_local_request(request):
+        raise HTTPException(403, "拒绝来自非本机页面的关闭请求")
+    hook = _shutdown_hook
+    if hook is None:
+        return {"ok": False, "message": "本实例不支持远程关闭"}
+    threading.Timer(0.2, hook).start()
+    return {"ok": True}
 
 
 @app.on_event("startup")
@@ -647,7 +694,16 @@ def move_execute(payload: dict = Body(...)) -> dict:
         raise HTTPException(404, "源路径不存在")
 
     def task(job):
-        ok, errors, warnings = mover.validate(src, os.path.dirname(dst) or "C:\\")
+        # ``dst`` (target\group\name) and its group folder usually do not exist
+        # yet on a first migration, so validate against the nearest existing
+        # ancestor instead of failing the "target directory missing" check.
+        dst_root = os.path.dirname(dst)
+        while dst_root and not os.path.isdir(dst_root):
+            parent = os.path.dirname(dst_root)
+            if parent == dst_root:
+                break
+            dst_root = parent
+        ok, errors, warnings = mover.validate(src, dst_root)
         for w in warnings:
             job.log(w, level="warn")
         if not ok and not payload.get("force"):
@@ -691,7 +747,16 @@ def move_batch(payload: dict = Body(...)) -> dict:
                 continue
             dst = mover.destination_for(src, dst_root, group)
             if os.path.exists(dst):
-                dst = __import__("app.core.util", fromlist=["unique_path"]).unique_path(dst)
+                dst = unique_path(dst)
+            # Same guard rails as a single migration (system dirs, links, space).
+            ok, errors, warnings = mover.validate(src, dst_root)
+            for w in warnings:
+                job.log(w, level="warn")
+            if not ok and not payload.get("force"):
+                failed += 1
+                results.append({"src": src, "dst": dst, "error": "；".join(errors)})
+                job.log(f"✗ {os.path.basename(src)}：{'；'.join(errors)}", level="error")
+                continue
             job.progress(base, f"({i + 1}/{total}) 正在迁移 {os.path.basename(src.rstrip(chr(92)))}")
             try:
                 res = mover.execute(
@@ -704,7 +769,6 @@ def move_batch(payload: dict = Body(...)) -> dict:
                 )
                 results.append(res)
                 succeeded += 1
-                freed = res.get("size_bytes", 0)
                 job.log(f"✓ {os.path.basename(src)} → {dst}（{res.get('files', 0)} 个文件）")
             except Exception as exc:  # noqa: BLE001
                 failed += 1
@@ -815,6 +879,8 @@ def journal_revert(record_id: str) -> dict:
         raise HTTPException(404, "记录不存在")
     if record.get("action") not in ("move_file", "move_dir", "move_app"):
         raise HTTPException(400, "该记录不支持还原")
+    if record.get("status") == "running":
+        raise HTTPException(409, "该迁移仍在进行中，请等待任务结束后再还原")
 
     def task(job):
         return mover.revert(record,
@@ -842,7 +908,7 @@ def registry_search(payload: dict = Body(...)) -> dict:
         job.progress(100, f"发现 {len(refs)} 处引用")
         return {"path": path, "refs": refs, "count": len(refs)}
 
-    j = jobs.run("registry-search", task, f"检索注册表引用")
+    j = jobs.run("registry-search", task, "检索注册表引用")
     return {"job_id": j.id}
 
 

@@ -1,0 +1,50 @@
+{
+  "name": "cclear-electron",
+  "version": "1.2.0",
+  "private": true,
+  "description": "CClear · C 盘空间管家（Electron 窗口壳）",
+  "main": "main.js",
+  "scripts": {
+    "predist": "node -e \"const fs=require('fs');if(!fs.existsSync('../dist/CClear-backend.exe')){console.error('错误: 缺少后端 dist/CClear-backend.exe —— 请先运行项目根目录的 build-exe.bat 或 pyinstaller CClear.spec');process.exit(1)}\"",
+    "start": "electron .",
+    "dist": "electron-builder --win --publish never"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.cclear.app",
+    "productName": "CClear",
+    "artifactName": "${productName}-Setup-${version}.${ext}",
+    "files": [
+      "main.js",
+      "preload.js",
+      "selftest.js",
+      "renderer/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/CClear-backend.exe",
+        "to": "dist/CClear-backend.exe"
+      },
+      {
+        "from": "../CClear.ico",
+        "to": "CClear.ico"
+      }
+    ],
+    "win": {
+      "icon": "../CClear.ico",
+      "requestedExecutionLevel": "requireAdministrator",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

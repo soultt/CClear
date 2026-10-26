@@ -100,7 +100,7 @@ build-exe.bat
 产物：`dist\CClear.exe`
 
 * 预编译版本已发布在 [Releases](https://github.com/soultt/CClear/releases/latest)，无需自行打包。
-* 单文件、无控制台窗口，双击即用，自带应用图标 `app/web/CClear.ico`。
+* 单文件、无控制台窗口，双击即用。
 * 内嵌 WebView2 界面，**不会打开浏览器**；约 40–60 MB（含 pythonnet / WebView2 桥接层）。
 * 可脱离 Python 运行；需要管理员权限时右键“以管理员身份运行”。
 * 打包配置在 `CClear.spec`，辅助 PyInstaller 钩子在 `packaging/hooks/`。

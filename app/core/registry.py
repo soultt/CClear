@@ -6,10 +6,9 @@ import os
 import subprocess
 import time
 import winreg
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Callable, Iterable, Optional
 
 from . import journal
-from .util import human_size, long_path
 
 # Hives we know how to walk with a friendly display name.
 HIVES = {
@@ -220,7 +219,8 @@ def search_keys(term: str, *, max_results: int = 60, hints: Optional[list[str]] 
     term_l = term.lower()
     hits: list[dict] = []
     roots = hints or DEFAULT_ROOTS
-    for hive_name, base in roots:
+    for entry in roots:
+        hive_name, base = entry[0], entry[1]
         stack = [base]
         while stack and len(hits) < max_results:
             subkey = stack.pop()
@@ -228,7 +228,7 @@ def search_keys(term: str, *, max_results: int = 60, hints: Optional[list[str]] 
                 hits.append({"hive": hive_name, "key": subkey, "reason": "key-name"})
             try:
                 with winreg.OpenKey(HIVES[hive_name], subkey, 0, winreg.KEY_READ) as k:
-                    n_sub, n_val = winreg.QueryInfoKey(k)[0], winreg.QueryInfoKey(k)[1]
+                    n_sub = winreg.QueryInfoKey(k)[0]
                     for i in range(n_sub):
                         try:
                             child = f"{subkey}\\{winreg.EnumKey(k, i)}"

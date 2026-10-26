@@ -87,15 +87,34 @@ _setup_streams()
 # server helpers
 # ---------------------------------------------------------------------------
 
-def find_port(preferred: int) -> int:
+def port_available(port: int, host: str = "127.0.0.1") -> bool:
+    """True when ``port`` can be bound and nothing is listening on it.
+
+    A bare ``bind()`` test is not enough on Windows: SO_REUSEADDR lets a socket
+    bind a port that another process is already listening on, and uvicorn would
+    then fail its own bind (or, worse, this instance would talk to the other
+    one). Probe with ``connect`` first, then try a plain bind for TIME_WAIT.
+    """
+    probe_host = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.25)
+        try:
+            if probe.connect_ex((probe_host, port)) == 0:
+                return False
+        except OSError:
+            pass
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host or "127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def find_port(preferred: int, host: str = "127.0.0.1") -> int:
     for port in [preferred] + list(range(preferred + 1, preferred + 40)):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                continue
+        if port_available(port, host):
+            return port
     raise SystemExit("找不到可用端口")
 
 
@@ -381,15 +400,18 @@ def main() -> int:
 
     import uvicorn
 
-    from app.server import WEB_DIR, app, set_elevate_args, set_relaunch_hook
+    from app.server import WEB_DIR, app, set_elevate_args, set_relaunch_hook, set_shutdown_hook
 
-    # The elevated copy must open the same kind of UI this one did.
+    port = find_port(args.port, args.host)
+
+    # The elevated copy must open the same kind of UI this one did, on the same
+    # port when it is free by then: the browser tab (or the Electron shell)
+    # keeps pointing at this URL after the hand-over.
     if args.browser:
-        set_elevate_args(["--browser"])
+        set_elevate_args(["--browser", "--port", str(port)])
     elif args.no_window:
-        set_elevate_args(["--no-window"])
+        set_elevate_args(["--no-window", "--port", str(port)])
 
-    port = find_port(args.port)
     url = f"http://{args.host}:{port}/"
     icon = os.path.join(WEB_DIR, APP_ICON)
 
@@ -424,21 +446,28 @@ def main() -> int:
         """Elevation hand-over for the windowless/browser modes."""
         server.should_exit = True
 
+    set_shutdown_hook(stop_service)
+
     if args.no_window:
         set_relaunch_hook(stop_service)
         print("  后台服务已就绪（未打开界面）。按 Ctrl+C 退出")
         return run_service(thread)
 
-    if not args.browser and open_window(url, icon):
+    ui_ok = os.path.isfile(os.path.join(WEB_DIR, "index.html"))
+
+    if not args.browser and ui_ok and open_window(url, icon):
         server.should_exit = True
         thread.join(5)
         return 0
 
-    if not args.browser:
+    if not args.browser and ui_ok:
         notify("独立窗口无法启动（需要 Microsoft Edge WebView2 运行时），"
                "已改用系统默认浏览器打开。")
     set_relaunch_hook(stop_service)
-    webbrowser.open(url)
+    if ui_ok:
+        webbrowser.open(url)
+    else:
+        print("  未找到界面文件（app/web 已移除）：以纯后台服务模式运行。")
     print("  按 Ctrl+C 退出")
     return run_service(thread)
 

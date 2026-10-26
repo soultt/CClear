@@ -18,6 +18,7 @@ Ra = "%APPDATA%"
 Up = "%USERPROFILE%"
 Win = "%SystemRoot%"
 Prog = "%ProgramData%"
+SysDrive = "%SystemDrive%"
 
 _NO_WINDOW = 0x08000000
 
@@ -92,7 +93,7 @@ CATEGORIES: list[dict] = [
     _cat(
         id="windows_old", name="旧版 Windows 文件 (Windows.old)", group="系统缓存", icon="windows",
         desc="系统升级后保留的旧系统文件，删除后将无法回退到上一版本 Windows。",
-        admin=True, risk="advanced", remove=[r"C:\Windows.old"],
+        admin=True, risk="advanced", remove=[rf"{SysDrive}\Windows.old"],
         processes=["TrustedInstaller.exe"],
     ),
     _cat(
@@ -254,12 +255,6 @@ def _targets(cat: dict) -> list[str]:
     targets.extend(_expand_paths(cat.get("remove", [])))
     targets.extend(_expand_globs(cat.get("globs", [])))
     return [t for t in targets if os.path.exists(t)]
-
-
-def available(cat: dict) -> bool:
-    if cat.get("mode") == "special":
-        return True
-    return True
 
 
 # ---------------------------------------------------------------------------

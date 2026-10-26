@@ -1,9 +1,9 @@
 """End-to-end smoke test for the CClear core engine (no UI)."""
-import json
 import os
 import shutil
 import sys
 import time
+import winreg
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -15,8 +15,8 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from app.core import appmover, cleaner, journal, mover, registry, scanner, winutil
-from app.core.util import human_size
+from app.core import appmover, cleaner, journal, mover, regclean, registry, scanner, winutil  # noqa: E402
+from app.core.util import human_size  # noqa: E402
 
 FAIL = []
 
@@ -118,7 +118,6 @@ check("数据在目标盘", os.path.isdir(result["dst"]))
 
 section("4. 注册表引擎")
 probe_key = "HKCU\\Software\\CClearTest"
-import winreg
 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\CClearTest") as k:
     winreg.SetValueEx(k, "InstallLocation", 0, winreg.REG_SZ, work)
     winreg.SetValueEx(k, "Legacy", 0, winreg.REG_SZ, "keep-me")
@@ -152,8 +151,6 @@ except OSError:
     pass
 
 section("5b. 注册表清理（分级 + 备份 + 删除）")
-from app.core import regclean
-
 check("分类按安全等级排序",
       [c["risk"] for c in regclean.category_meta()] ==
       sorted([c["risk"] for c in regclean.category_meta()],

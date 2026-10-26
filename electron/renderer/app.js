@@ -1,22 +1,12 @@
 /* ==========================================================================
-   CClear · front-end controller (vanilla JS)
+   CClear · Electron 渲染层控制器（vanilla JS）
+   所有后端请求都经 preload 暴露的 window.cclear.api → 主进程转发到 FastAPI，
+   页面自身不发起任何网络请求（CSP connect-src 'none'）。
    ========================================================================== */
 'use strict';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-
-const PAGE_META = {
-  overview: ['总览', '磁盘概况与一键优化'],
-  cleaner: ['垃圾清理', '临时文件 / 缓存 / 回收站清理'],
-  registry: ['注册表清理', '失效项扫描 · 安全分级 · 备份后清理'],
-  large: ['大文件转移', '定位大文件并迁移到其他磁盘'],
-  dir: ['目录迁移', '目录搬家 · 联接 · 注册表同步'],
-  apps: ['应用迁移', '已安装程序整体迁移'],
-  journal: ['迁移记录', '可回滚的操作历史'],
-  settings: ['设置', '迁移默认值与安全维护'],
-  about: ['关于', '版本信息 · 开源仓库'],
-};
 
 const state = {
   overview: {},
@@ -28,12 +18,11 @@ const state = {
   reg: { cats: [], sel: new Set() },
   regLevel: '全部',
   large: { files: [], sel: new Set() },
-  apps: { list: [], sel: new Set(), filter: 'all', query: '', running: new Set(), sort: { key: '', dir: 'asc' } },
+  apps: { list: [], sel: new Set(), filter: 'all', query: '', sort: { key: '', dir: 'asc' } },
   journal: [],
   dirPlan: null,
   target: '',
   appTarget: '',
-  busy: false,
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -55,20 +44,17 @@ const shortPath = (p, head = 26, tail = 24) => {
   if (!p) return '–';
   return p.length > head + tail + 3 ? `${p.slice(0, head)}…${p.slice(-tail)}` : p;
 };
+const icon = (name, style = '') => `<svg${style ? ` style="${style}"` : ''}><use href="#i-${name}"/></svg>`;
 
 async function api(path, body, opts = {}) {
-  const init = { method: opts.method || (body === undefined ? 'GET' : 'POST'), headers: {} };
-  if (body !== undefined) {
-    init.headers['Content-Type'] = 'application/json';
-    init.body = JSON.stringify(body);
+  try {
+    return await window.cclear.api(path, {
+      method: opts.method || (body === undefined ? 'GET' : 'POST'),
+      body,
+    });
+  } catch (err) {
+    throw new Error(String(err && err.message || err).replace(/^Error: /, ''));
   }
-  const res = await fetch(path, init);
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try { const j = await res.json(); msg = j.detail || msg; } catch (e) { /* ignore */ }
-    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
-  }
-  return res.status === 204 ? {} : res.json();
 }
 
 function toast(title, body = '', kind = 'info', ms = 4600) {
@@ -80,13 +66,10 @@ function toast(title, body = '', kind = 'info', ms = 4600) {
   setTimeout(() => el.remove(), ms + 350);
 }
 
-/* Give a click an immediate, unmistakable visual answer: the button turns
-   disabled and shows a spinner + label while the action runs. Toasts alone can
-   be missed (and animation may be paused in a background tab), which makes a
-   slow action look like a dead button. */
+/* 按钮立即给出反馈：禁用 + 转圈 + 文案，避免慢操作看起来像点不动 */
 async function withBusy(btn, busyText, fn) {
   if (!btn) return fn();
-  if (btn.disabled) return undefined;            // ignore double clicks
+  if (btn.disabled) return undefined;
   const original = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = `<svg class="spin"><use href="#i-refresh"/></svg>${esc(busyText)}`;
@@ -98,21 +81,64 @@ async function withBusy(btn, busyText, fn) {
   }
 }
 
-const icon = (name, style = '') => `<svg${style ? ` style="${style}"` : ''}><use href="#i-${name}"/></svg>`;
+/* ---------------------------------------------------------------- modal */
+function openModal(html, wide = false) {
+  const modal = $('#modal');
+  modal.className = `modal${wide ? ' wide' : ''}`;
+  modal.innerHTML = html;
+  $('#overlay').classList.add('show');
+}
+function closeModal() { $('#overlay').classList.remove('show'); $('#modal').innerHTML = ''; }
+$('#overlay').addEventListener('click', (e) => { if (e.target.id === 'overlay') closeModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
-/* ------------------------------------------------------------- job runner */
-/* Several tasks can run at the same time (a scan while a clean-up finishes, a
-   registry backup while a migration runs, …). The bar therefore keeps one row
-   per job: a job that ends retires only its own row and the bar disappears when
-   the last row is gone - never before. The log panel belongs to the job whose
-   日志 button was toggled last. */
-const jobRows = new Map();          // jobId -> { row, logs: [html], open: bool }
-let jobLogOwner = null;             // jobId the log panel is showing
+function confirmModal({ title, body, confirmText = '确认', danger = false, onConfirm }) {
+  openModal(`
+    <div class="modal-head">${icon(danger ? 'alert' : 'info', 'width:18px;color:var(--warn)')}<h3>${esc(title)}</h3></div>
+    <div class="modal-body"><div style="font-size:13.5px;line-height:1.8;color:var(--text-dim)">${body}</div></div>
+    <div class="modal-foot"><div class="spacer"></div>
+      <button class="btn" data-close>取消</button>
+      <button class="btn ${danger ? 'danger' : 'primary'}" data-ok>${esc(confirmText)}</button>
+    </div>`);
+  $('[data-close]').onclick = closeModal;
+  $('[data-ok]').onclick = async () => { closeModal(); await onConfirm(); };
+}
+
+/* ------------------------------------------------------------------- nav */
+$$('.nav-item').forEach((el) => el.addEventListener('click', () => go(el.dataset.page)));
+document.addEventListener('click', (e) => {
+  const g = e.target.closest('[data-goto]');
+  if (g) go(g.dataset.goto);
+});
+
+/* 外部链接一律交给系统浏览器（主进程 setWindowOpenHandler + 后端 open-url 兜底） */
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('[data-external]');
+  if (!a) return;
+  e.preventDefault();
+  openExternal(a.dataset.external || a.getAttribute('href') || '');
+});
+
+function go(page) {
+  $$('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.page === page));
+  $$('.page').forEach((p) => p.classList.toggle('active', p.id === `page-${page}`));
+  $('#content').scrollTop = 0;
+  if (page === 'journal') loadJournal();
+  if (page === 'apps' && !state.apps.list.length) loadApps();
+  if (page === 'settings') fillSettings();
+  if (page === 'about') fillAbout();
+  if (page === 'registry') renderReg();
+  if (page === 'dir') renderDrivePick(state.target);
+}
+
+/* ---------------------------------------------------------------- job dock */
+/* 多任务并行：每个任务一行，结束只退自己的行；日志面板属于最后点开「日志」的任务 */
+const jobRows = new Map();
+let jobLogOwner = null;
 
 const JOB_ICON = { running: 'play', pending: 'play', done: 'check', failed: 'alert', cancelled: 'alert' };
-const JOB_STATUS_ZH = { done: '已完成', failed: '失败', cancelled: '已取消' };
 
-function jobBar() { $('#jobbar').classList.toggle('show', jobRows.size > 0); }
+function jobDock() { $('#jobdock').classList.toggle('show', jobRows.size > 0); }
 
 function ensureJobRow(jobId, title) {
   let entry = jobRows.get(jobId);
@@ -121,7 +147,7 @@ function ensureJobRow(jobId, title) {
   row.className = 'jobrow';
   row.dataset.job = jobId;
   row.innerHTML = `
-    <svg class="ji" style="width:17px;color:var(--accent-2)"><use href="#i-play"/></svg>
+    <svg class="ji" style="width:16px"><use href="#i-play"/></svg>
     <div class="title"></div>
     <div class="progress"><i></i></div>
     <div class="pct">0%</div>
@@ -134,7 +160,7 @@ function ensureJobRow(jobId, title) {
   $('#jobRows').appendChild(row);
   entry = { row, logs: [] };
   jobRows.set(jobId, entry);
-  jobBar();
+  jobDock();
   return entry;
 }
 
@@ -148,7 +174,7 @@ function dropJobRow(jobId) {
     $('#jobLog').style.display = 'none';
     $('#jobLog').innerHTML = '';
   }
-  jobBar();
+  jobDock();
 }
 
 function jobLogLines(j) {
@@ -158,10 +184,7 @@ function jobLogLines(j) {
 
 function toggleJobLog(jobId) {
   const panel = $('#jobLog');
-  if (jobLogOwner === jobId && panel.style.display !== 'none') {
-    logClose();
-    return;
-  }
+  if (jobLogOwner === jobId && panel.style.display !== 'none') { logClose(); return; }
   jobLogOwner = jobId;
   const entry = jobRows.get(jobId);
   panel.innerHTML = entry ? entry.logs.join('') : '';
@@ -226,8 +249,6 @@ function trackJob(jobId, title, handlers = {}) {
       renderJob(j);
       if (typeof handlers.onProgress === 'function') handlers.onProgress(j);
       if (!['running', 'pending'].includes(j.status)) {
-        // Keep this job's own row readable, then retire it - other jobs keep
-        // their rows (and their progress) untouched.
         setTimeout(() => dropJobRow(jobId), j.status === 'done' ? 2500 : 6000);
         if (j.status === 'failed') toast('任务失败', j.error || '', 'error', 8000);
         else if (j.status === 'cancelled') toast('已取消', title || '', 'warn');
@@ -241,68 +262,129 @@ function trackJob(jobId, title, handlers = {}) {
   });
 }
 
+const activeJobKinds = new Set();   /* 进行中的任务种类（按接口区分）：同类互斥、异类可并行 */
 async function runJob(path, body, title, handlers) {
+  if (activeJobKinds.has(path)) {
+    toast('提示', `「${title || '任务'}」正在运行，请等待其完成或取消后再操作`, 'warn');
+    return null;
+  }
+  activeJobKinds.add(path);
   try {
     const { job_id } = await api(path, body);
     return await trackJob(job_id, title, handlers);
   } catch (err) {
     toast('请求失败', err.message, 'error', 8000);
     return null;
+  } finally {
+    activeJobKinds.delete(path);
   }
 }
 
-/* ------------------------------------------------------------------ modal */
-function openModal(html, wide = false) {
-  const modal = $('#modal');
-  modal.className = `modal${wide ? ' wide' : ''}`;
-  modal.innerHTML = html;
-  $('#overlay').classList.add('show');
+/* =========================================================================
+   任务锁 + 单项状态徽标（清理 / 注册表清理两页专用）
+   - 计数器加锁：清理结束后自动重扫时不解锁，控件不会闪现可用
+   - 徽标：任务进行中按「已过=已完成 / 当前=清理中 / 未到=等待中」推导，
+     结束后用 result.per_category 补充释放/跳过结果；取消或失败整体清除
+   ========================================================================= */
+const pageLock = { cleaner: 0, registry: 0 };
+const LOCK_BUTTONS = {
+  cleaner: ['#btnJunkScan', '#btnJunkClean', '#btnSelectSafe', '#btnSelectAll', '#btnSelectNone'],
+  registry: ['#btnRegScan', '#btnRegClean', '#btnRegSelectSafe', '#btnRegSelectAll', '#btnRegSelectNone'],
+};
+const LOCK_CHIP_ATTR = { cleaner: 'data-group', registry: 'data-reglevel' };
+const junkBadges = new Map();   // catId -> { text, cls }
+const regBadges = new Map();
+
+function setPageLock(page, on) {
+  pageLock[page] = Math.max(0, pageLock[page] + (on ? 1 : -1));
+  const locked = pageLock[page] > 0;
+  (LOCK_BUTTONS[page] || []).forEach((sel) => { const el = $(sel); if (el) el.disabled = locked; });
+  const attr = LOCK_CHIP_ATTR[page];
+  if (attr) $$(`#page-${page} .chip[${attr}]`).forEach((chip) => chip.classList.toggle('disabled', locked));
 }
-function closeModal() { $('#overlay').classList.remove('show'); $('#modal').innerHTML = ''; }
-$('#overlay').addEventListener('click', (e) => { if (e.target.id === 'overlay') closeModal(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
-function confirmModal({ title, body, confirmText = '确认', danger = false, onConfirm }) {
-  openModal(`
-    <div class="modal-head">${icon(danger ? 'alert' : 'info', 'width:18px;color:var(--warn)')}<h3>${esc(title)}</h3></div>
-    <div class="modal-body"><div style="font-size:13.5px;line-height:1.8;color:var(--text-dim)">${body}</div></div>
-    <div class="modal-foot"><div class="spacer"></div>
-      <button class="btn" data-close>取消</button>
-      <button class="btn ${danger ? 'danger' : 'primary'}" data-ok>${esc(confirmText)}</button>
-    </div>`);
-  $('[data-close]').onclick = closeModal;
-  $('[data-ok]').onclick = async () => { closeModal(); await onConfirm(); };
+/* 由轮询 message 推导当前执行到队列第几项：后端每个项目开始时都会发
+   「正在清理：{项目名}」（垃圾）/「正在检查：{组名}」「正在备份 {组名}…」（注册表），
+   因此用完整文案精确匹配，避免子串误判；匹配不到则保持原状态 */
+function matchQueueIndex(queue, current, message) {
+  const msg = String(message || '').trim();
+  if (!msg) return current;
+  for (let i = Math.max(0, current); i < queue.length; i++) {
+    const name = queue[i] && queue[i].name;
+    if (!name) continue;
+    if (msg === `正在清理：${name}` || msg === `正在检查：${name}` || msg.startsWith(`正在备份 ${name}`)) return i;
+  }
+  return current;
 }
 
-/* ------------------------------------------------------------------- nav */
-$$('.nav-item').forEach((el) => el.addEventListener('click', () => go(el.dataset.page)));
-document.addEventListener('click', (e) => {
-  const g = e.target.closest('[data-goto]');
-  if (g) go(g.dataset.goto);
-});
+function paintJunkBadge(id) {
+  const card = $(`#junkGrid .junk-card[data-cat="${id}"]`);
+  if (!card) return;
+  const old = card.querySelector('.status-badge');
+  if (old) old.remove();
+  const b = junkBadges.get(id);
+  const anchor = card.querySelector('.junk-name');
+  if (b && anchor) anchor.insertAdjacentHTML('beforeend', `<span class="status-badge ${b.cls}">${esc(b.text)}</span>`);
+}
 
-/* Every external link (sidebar footer, about page) goes to the system browser:
-   the desktop window has no tabs or address bar, so loading the site inside it
-   would leave the user with no way back to the app. */
-document.addEventListener('click', (e) => {
-  const a = e.target.closest('[data-external]');
-  if (!a) return;
-  e.preventDefault();
-  openExternal(a.dataset.external || a.getAttribute('href') || '');
-});
+function paintRegBadge(id) {
+  const card = $(`#regGrid .reg-card[data-reg="${id}"]`);
+  if (!card) return;
+  const old = card.querySelector('.status-badge');
+  if (old) old.remove();
+  const b = regBadges.get(id);
+  if (!b) return;
+  const top = card.querySelector('.reg-card-top');
+  if (!top) return;
+  const anchor = top.querySelector('.num');
+  if (anchor) anchor.insertAdjacentHTML('beforebegin', `<span class="status-badge ${b.cls}">${esc(b.text)}</span>`);
+  else top.insertAdjacentHTML('beforeend', `<span class="status-badge ${b.cls}">${esc(b.text)}</span>`);
+}
 
-function go(page) {
-  $$('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.page === page));
-  $$('.page').forEach((p) => p.classList.toggle('active', p.id === `page-${page}`));
-  const [t, c] = PAGE_META[page] || ['', ''];
-  $('#pageTitle').textContent = t; $('#pageCrumb').textContent = c;
-  $('.content').scrollTop = 0;
-  if (page === 'journal') loadJournal();
-  if (page === 'apps' && !state.apps.list.length) loadApps();
-  if (page === 'settings') fillSettings();
-  if (page === 'about') fillAbout();
-  if (page === 'registry') renderReg();
-  if (page === 'dir') renderDrivePick(state.target);
+function setJunkBadge(id, text, cls) {
+  if (text) junkBadges.set(id, { text, cls }); else junkBadges.delete(id);
+  paintJunkBadge(id);
+}
+
+function setRegBadge(id, text, cls) {
+  if (text) regBadges.set(id, { text, cls }); else regBadges.delete(id);
+  paintRegBadge(id);
+}
+
+function clearJunkBadges() {
+  const ids = [...junkBadges.keys()];
+  junkBadges.clear();
+  ids.forEach(paintJunkBadge);
+}
+
+function clearRegBadges() {
+  const ids = [...regBadges.keys()];
+  regBadges.clear();
+  ids.forEach(paintRegBadge);
+}
+
+/* 任务进行中（每次轮询调用）：推进队列并刷新所有徽标 */
+function applyRunningBadges(queue, current, badges, paintAll) {
+  queue.forEach((q, i) => {
+    const st = i < current ? { t: '已完成', c: 'done' }
+      : i === current ? { t: '清理中', c: 'running' }
+        : { t: '等待中', c: 'waiting' };
+    badges.set(q.id, st);
+  });
+  queue.forEach((q) => paintAll(q.id));
+}
+
+/* 任务正常结束后按 result.per_category 补最终徽标 */
+function finalizeBadges(queue, per, badges, paintAll, fmtDone, isSkipped) {
+  const byId = new Map((per || []).map((p) => [p.id, p]));
+  queue.forEach((q) => {
+    const p = byId.get(q.id);
+    if (!p) { badges.delete(q.id); paintAll(q.id); return; }
+    if (isSkipped(p)) badges.set(q.id, { text: '已跳过', cls: 'skipped' });
+    else if (fmtDone(p)) badges.set(q.id, { text: fmtDone(p), cls: 'done' });
+    else badges.set(q.id, { text: '已完成', cls: 'done' });
+  });
+  queue.forEach((q) => paintAll(q.id));
 }
 
 /* =========================================================================
@@ -354,14 +436,15 @@ function renderOverview() {
 
   const sf = (o.system_files || []).reduce((a, b) => a + b.size, 0);
   $('#stSysFiles').textContent = bytes(sf);
-  $('#topDrive').textContent = o.system_drive || 'C:';
+
+  $('#adminBox').classList.toggle('ok', !!o.admin);
   $('#sideAdmin').innerHTML = o.admin
-    ? `<span style="color:var(--success)">● 管理员权限</span>`
-    : `<span style="color:var(--warn)">● 普通权限</span>`;
-  $('#sideVersion').textContent = `v${o.version || '-'} · 本地运行`;
-  $('#sideTarget').textContent = state.target ? `目标盘：${state.target}` : '未设置目标盘';
+    ? `<span class="ok">●</span> 管理员权限`
+    : `<span class="off">●</span> 普通权限`;
   $('#btnElevate').style.display = o.admin ? 'none' : '';
   $('#btnElevate2').style.display = o.admin ? 'none' : '';
+  $('#sideTarget').textContent = state.target ? `目标盘：${state.target}` : '未设置目标盘';
+  $('#sideVersion').textContent = `v${o.version || '-'} · 本地运行`;
   $('#setAdmin').textContent = o.admin ? '已获得' : '未获得（部分功能受限）';
   $('#setSysDrive').textContent = o.system_drive || '–';
   $('#setOs').textContent = `${(o.os || {}).name || '–'}`;
@@ -404,16 +487,14 @@ function renderHotspots(node, fromCache = false) {
     </div>`).join('');
 }
 
-async function loadRecent() {
-  try {
-    const { records } = await api('/api/journal');
-    state.journal = records;
-    const rows = records.slice(0, 5);
-    $('#recentList').innerHTML = rows.length ? `<div class="table-wrap" style="max-height:none"><table>
-      <thead><tr><th style="width:150px">时间</th><th>操作</th><th>路径</th><th class="num" style="width:90px">大小</th><th style="width:90px">状态</th></tr></thead>
-      <tbody>${rows.map(recentRow).join('')}</tbody></table></div>` : '<div class="empty small">暂无操作记录</div>';
-  } catch (e) { /* ignore */ }
-}
+const typeLabel = (a) => ({
+  move_app: { text: '应用迁移', cls: 'violet' },
+  move_dir: { text: '目录迁移', cls: 'info' },
+  move_file: { text: '文件转移', cls: 'info' },
+  clean: { text: '垃圾清理', cls: 'safe' },
+  regclean: { text: '注册表清理', cls: 'violet' },
+  delete_files: { text: '删除文件', cls: 'caution' },
+}[a] || { text: a || '操作', cls: 'plain' });
 
 function recentRow(r) {
   const kind = typeLabel(r.action);
@@ -426,19 +507,33 @@ function recentRow(r) {
   </tr>`;
 }
 
-const typeLabel = (a) => ({
-  move_app: { text: '应用迁移', cls: 'violet' },
-  move_dir: { text: '目录迁移', cls: 'info' },
-  move_file: { text: '文件转移', cls: 'info' },
-  clean: { text: '垃圾清理', cls: 'safe' },
-  regclean: { text: '注册表清理', cls: 'violet' },
-  delete_files: { text: '删除文件', cls: 'caution' },
-}[a] || { text: a || '操作', cls: 'plain' });
+async function loadRecent() {
+  try {
+    const { records } = await api('/api/journal');
+    state.journal = records;
+    const rows = records.slice(0, 5);
+    $('#recentList').innerHTML = rows.length ? `<div class="table-wrap"><table>
+      <thead><tr><th style="width:150px">时间</th><th>操作</th><th>路径</th><th class="num" style="width:90px">大小</th><th style="width:90px">状态</th></tr></thead>
+      <tbody>${rows.map(recentRow).join('')}</tbody></table></div>` : '<div class="empty small">暂无操作记录</div>';
+  } catch (e) { /* ignore */ }
+}
 
 document.addEventListener('click', (e) => {
   const m = e.target.closest('[data-hot-migrate]');
   if (m) { go('dir'); $('#dirSrc').value = m.dataset.hotMigrate; updateSteps(2); }
 });
+
+$('#btnRefreshDrives').onclick = () => loadOverview();
+$('#btnHotspots').onclick = async () => {
+  $('#hotspotList').innerHTML = '<div class="empty small">正在分析 C 盘目录占用，可能需要 1-2 分钟…</div>';
+  await runJob('/api/dir/hotspots', { root: 'C:\\', depth: 2 }, '分析磁盘占用', {
+    onDone: (j) => {
+      if (j.status !== 'done') { $('#hotspotList').innerHTML = '<div class="empty small">分析未完成</div>'; return; }
+      state.overview.hotspots = (j.result.tree || {}).children || [];
+      renderHotspots(j.result.tree);
+    },
+  });
+};
 
 /* =========================================================================
    CLEANER
@@ -451,16 +546,17 @@ const RISK_LEVELS = [
   { key: 'advanced', label: '高级', hint: '涉及系统回退或重建成本较高，建议逐项确认' },
 ];
 
-/* Cards are always ordered by safety level (safe → caution → advanced), then
-   by the declared group order, so the riskiest items never appear first. */
+/* 卡片始终按安全等级排列（安全 → 注意 → 高级），最危险的项永远不排前面 */
 function sortByRisk(list) {
   return [...list].sort((a, b) => (RISK_RANK[a.risk] ?? 9) - (RISK_RANK[b.risk] ?? 9));
 }
 
+const catIcon = (i) => ({ temp: 'folder', bug: 'alert', image: 'chart', update: 'refresh', windows: 'disk', log: 'file', speed: 'play', recycle: 'undo', history: 'history', globe: 'open', chrome: 'app', edge: 'app', firefox: 'app', code: 'package', package: 'package', trash: 'trash' }[i] || 'trash');
+
 function renderJunk() {
   const cats = sortByRisk(state.junk.cats);
   const grid = $('#junkGrid');
-  if (!cats.length) { grid.innerHTML = '<div class="empty">暂无清理项</div>'; return; }
+  if (!cats.length) { grid.innerHTML = '<div class="empty">暂无清理项</div>'; updateCleanButton(); return; }
   const list = state.junkGroup === '全部' ? cats : cats.filter((c) => c.group === state.junkGroup);
   if (!list.length) { grid.innerHTML = '<div class="empty">该分组下暂无清理项</div>'; updateCleanButton(); return; }
   grid.innerHTML = RISK_LEVELS.map((lv) => {
@@ -479,7 +575,11 @@ function renderJunk() {
     </div>`;
   }).filter(Boolean).join('');
   updateCleanButton();
+  applyJunkBadges();
 }
+
+/* 网格被重渲染后（如切分组、扫描完成）把仍在展示期的徽标重新挂回卡片 */
+function applyJunkBadges() { junkBadges.forEach((_, id) => paintJunkBadge(id)); }
 
 function junkCard(c) {
   const on = state.junk.sel.has(c.id);
@@ -507,24 +607,23 @@ function junkCard(c) {
   </div>`;
 }
 
-const catIcon = (i) => ({ temp: 'folder', bug: 'alert', image: 'chart', update: 'refresh', windows: 'disk', log: 'file', speed: 'play', recycle: 'undo', history: 'history', globe: 'open', chrome: 'app', edge: 'app', firefox: 'app', code: 'package', package: 'package', trash: 'trash' }[i] || 'trash');
-
 function updateCleanButton() {
   const ids = [...state.junk.sel];
   const size = ids.reduce((a, id) => a + (state.junk.sizes[id] || 0), 0);
   const scanned = ids.filter((id) => state.junk.sizes[id] !== undefined).length;
   const btn = $('#btnJunkClean');
-  btn.disabled = ids.length === 0;
+  btn.disabled = ids.length === 0 || pageLock.cleaner > 0;
   btn.innerHTML = `${icon('broom')}清理选中项${ids.length ? `（${ids.length} 项${scanned ? ` · ${bytes(size)}` : ' · 未扫描'}）` : ''}`;
 }
 
 $('#junkGrid').addEventListener('click', (e) => {
+  if (pageLock.cleaner > 0) return;
   const card = e.target.closest('[data-cat]');
   if (!card) return;
   const id = card.dataset.cat;
   const cat = state.junk.cats.find((x) => x.id === id);
   if (cat && cat.admin && !state.overview.admin) {
-    toast('需要管理员权限', `“${cat.name}”需要管理员权限：请点击右上角「获取管理员权限」，在 UAC 提示中确认后会以管理员身份重新启动（本窗口会自动关闭）。`, 'warn', 9000);
+    toast('需要管理员权限', `“${cat.name}”需要管理员权限：请点击左下角「获取管理员权限」，在 UAC 提示中确认后会以管理员身份重启（本窗口会自动切换过去）。`, 'warn', 9000);
     return;
   }
   if (state.junk.sel.has(id)) state.junk.sel.delete(id); else state.junk.sel.add(id);
@@ -534,6 +633,7 @@ $('#junkGrid').addEventListener('click', (e) => {
 });
 
 $$('[data-group]').forEach((chip) => chip.addEventListener('click', () => {
+  if (pageLock.cleaner > 0) return;
   $$('[data-group]').forEach((c) => c.classList.remove('on'));
   chip.classList.add('on');
   state.junkGroup = chip.dataset.group;
@@ -544,7 +644,6 @@ $('#btnSelectAll').onclick = () => {
   state.junk.sel.clear();
   state.junk.cats.forEach((c) => { if (!(c.admin && !state.overview.admin)) state.junk.sel.add(c.id); });
   renderJunk();
-  updateCleanButton();
 };
 $('#btnSelectNone').onclick = () => { state.junk.sel.clear(); renderJunk(); };
 $('#btnSelectSafe').onclick = () => {
@@ -560,7 +659,6 @@ $('#btnSelectSafe').onclick = () => {
 };
 
 $('#btnJunkScan').onclick = () => {
-  // Scan only what the user ticked - an unchecked card is never analysed.
   const ids = [...state.junk.sel];
   if (!ids.length) {
     toast('请先选择项目', '勾选要扫描的清理项目（默认已选中安全项），再点击“扫描选中项”。', 'warn');
@@ -570,25 +668,29 @@ $('#btnJunkScan').onclick = () => {
 };
 
 async function scanJunk(ids) {
-  await runJob('/api/junk/scan', { ids }, '扫描垃圾文件', {
-    onDone: (j) => {
-      if (j.status !== 'done') return;
-      const res = j.result || {};
-      const byId = new Map((res.categories || []).map((c) => [c.id, c]));
-      // Only the ticked projects were scanned; keep the rest as they were.
-      state.junk.sizes = {};
-      state.junk.cats = state.junk.cats.map((c) => (byId.has(c.id) ? { ...c, ...byId.get(c.id) } : c));
-      state.junk.cats.forEach((c) => { if (byId.has(c.id)) state.junk.sizes[c.id] = c.size; });
-      const scannedTotal = (res.categories || []).reduce((a, c) => a + (c.size || 0), 0);
-      state.overview.quick = { total: scannedTotal, total_human: res.total_human };
-      $('#stJunk').textContent = res.total_human;
-      $('#navCleanPill').textContent = res.total_human;
-      $('#stJunkHint').textContent = `已扫描 ${ids.length} 个项目${ids.length < state.junk.cats.length ? ' · 部分结果' : ''}`;
-      renderJunk();
-      toast('扫描完成', `已扫描 ${ids.length} 个项目，共发现 ${res.total_human} 可清理内容`, 'ok');
-    },
-  });
-};
+  setPageLock('cleaner', true);
+  try {
+    await runJob('/api/junk/scan', { ids }, '扫描垃圾文件', {
+      onDone: (j) => {
+        if (j.status !== 'done') return;
+        const res = j.result || {};
+        const byId = new Map((res.categories || []).map((c) => [c.id, c]));
+        state.junk.sizes = {};
+        state.junk.cats = state.junk.cats.map((c) => (byId.has(c.id) ? { ...c, ...byId.get(c.id) } : c));
+        state.junk.cats.forEach((c) => { if (byId.has(c.id)) state.junk.sizes[c.id] = c.size; });
+        const scannedTotal = (res.categories || []).reduce((a, c) => a + (c.size || 0), 0);
+        state.overview.quick = { total: scannedTotal, total_human: res.total_human };
+        $('#stJunk').textContent = res.total_human;
+        $('#navCleanPill').textContent = res.total_human;
+        $('#stJunkHint').textContent = `已扫描 ${ids.length} 个项目${ids.length < state.junk.cats.length ? ' · 部分结果' : ''}`;
+        renderJunk();
+        toast('扫描完成', `已扫描 ${ids.length} 个项目，共发现 ${res.total_human} 可清理内容`, 'ok');
+      },
+    });
+  } finally {
+    setPageLock('cleaner', false);
+  }
+}
 
 $('#btnJunkClean').onclick = () => {
   const ids = [...state.junk.sel];
@@ -600,36 +702,65 @@ $('#btnJunkClean').onclick = () => {
   const adminNeeded = ids.filter((id) => {
     const c = state.junk.cats.find((x) => x.id === id); return c && c.admin;
   });
+  const zeroIds = ids.filter((id) => state.junk.sizes[id] === 0);
   let body = `<div>即将清理 <b>${ids.length}</b> 个类别，预计释放 <b>${bytes(size)}</b>。</div>`;
   body += `<ul style="margin:12px 0 0 18px;line-height:1.9">${ids.map((id) => {
     const c = state.junk.cats.find((x) => x.id === id) || {};
     return `<li>${esc(c.name || id)}${c.risk !== 'safe' ? ` <span class="badge ${c.risk}">${RISK_TEXT[c.risk] || c.risk}</span>` : ''}</li>`;
   }).join('')}</ul>`;
   if (risky.length && state.junk.sel.has('recycle_bin')) body += `<div class="note warn" style="margin-top:12px">${icon('alert', 'width:15px')}<div>包含回收站，清空后文件将无法恢复。</div></div>`;
-  if (adminNeeded.length && !state.overview.admin) body += `<div class="note warn" style="margin-top:12px">${icon('lock', 'width:15px')}<div>其中 ${adminNeeded.length} 项需要管理员权限，普通权限下无法执行：请先点击右上角「获取管理员权限」，UAC 确认后本程序会以管理员身份重新启动，再执行即可。</div></div>`;
+  if (adminNeeded.length && !state.overview.admin) body += `<div class="note warn" style="margin-top:12px">${icon('lock', 'width:15px')}<div>其中 ${adminNeeded.length} 项需要管理员权限，普通权限下无法执行：请先点击左下角「获取管理员权限」，UAC 确认后本程序会以管理员身份重新启动，再执行即可。</div></div>`;
   const unscanned = ids.filter((id) => state.junk.sizes[id] === undefined);
   if (unscanned.length) body += `<div class="note warn" style="margin-top:12px">${icon('info', 'width:15px')}<div>其中 ${unscanned.length} 项尚未扫描，将按清理规则直接处理，释放大小未计入上方估算。</div></div>`;
+  if (zeroIds.length) body += `<div class="note warn" style="margin-top:12px">${icon('info', 'width:15px')}<div>其中 ${zeroIds.length} 项扫描结果为 0 KB，将自动跳过。</div></div>`;
   confirmModal({
     title: '确认清理所选项目？', body, confirmText: '开始清理', danger: true,
     onConfirm: async () => {
-      await runJob('/api/junk/clean', { ids }, '清理垃圾文件', {
-        onDone: (j) => {
-          if (j.status !== 'done') return;
-          const r = j.result || {};
-          const fails = (r.details || []).filter((d) => d.ok === false);
-          if (fails.length) {
-            const reason = (fails[0].message || '').split('\n')[0].slice(0, 70);
-            toast('清理完成，部分未成功',
-              `${fails.length} 项未完成（${fails[0].category || ''}）：${reason}　｜　已释放 ${r.freed_human}`,
-              'warn', 12000);
-          } else {
-            toast('清理完成', `释放 ${r.freed_human}，删除 ${r.removed} 项，跳过 ${r.skipped} 项`, 'ok', 7000);
-          }
-          state.junk.sel.clear();
-          scanJunk(ids);
-          loadOverview();
-        },
-      });
+      /* 0 KB 的选中项自动跳过：不进入清理任务 */
+      const effIds = ids.filter((id) => state.junk.sizes[id] !== 0);
+      if (!effIds.length) { toast('选中项均为 0 KB，无需清理。', '', 'ok'); return; }
+      /* 队列按卡片顺序（安全→注意→高级），与后端 ordered_categories 的执行顺序一致 */
+      const queue = state.junk.cats.filter((c) => effIds.includes(c.id))
+        .map((c) => ({ id: c.id, name: c.name }));
+      junkBadges.clear();
+      queue.forEach((q) => setJunkBadge(q.id, '等待中', 'waiting'));
+      zeroIds.forEach((id) => setJunkBadge(id, '已跳过 · 0 KB', 'skipped'));
+      let current = -1;
+      setPageLock('cleaner', true);
+      try {
+        await runJob('/api/junk/clean', { ids: effIds }, '清理垃圾文件', {
+          onProgress: (j) => {
+            const idx = matchQueueIndex(queue, current, j.message);
+            if (idx !== current) { current = idx; applyRunningBadges(queue, current, junkBadges, paintJunkBadge); }
+          },
+          onDone: (j) => {
+            if (j.status === 'done') {
+              /* 正常结束：用 per_category 补「已完成 · 释放 X / 已跳过」 */
+              finalizeBadges(queue, (j.result || {}).per_category, junkBadges, paintJunkBadge,
+                (p) => (p.freed > 0 && p.freed_human ? `已完成 · 释放 ${p.freed_human}` : ''),
+                (p) => (p.failed || 0) > 0);
+            } else {
+              clearJunkBadges();
+            }
+            if (j.status !== 'done') return;
+            const r = j.result || {};
+            const fails = (r.details || []).filter((d) => d.ok === false);
+            if (fails.length) {
+              const reason = (fails[0].message || '').split('\n')[0].slice(0, 70);
+              toast('清理完成，部分未成功',
+                `${fails.length} 项未完成（${fails[0].category || ''}）：${reason}　｜　已释放 ${r.freed_human}`,
+                'warn', 12000);
+            } else {
+              toast('清理完成', `释放 ${r.freed_human}，删除 ${r.removed} 项，跳过 ${r.skipped} 项`, 'ok', 7000);
+            }
+            state.junk.sel.clear();
+            scanJunk(ids);
+            loadOverview();
+          },
+        });
+      } finally {
+        setPageLock('cleaner', false);
+      }
     },
   });
 };
@@ -667,12 +798,16 @@ function renderReg() {
           <span class="cnt">${list.length} 组${scannedCount ? ` · 已扫描 ${scannedCount} 组 · ${total} 项` : ''}</span>
           <span class="hint">${REG_HINTS[lv.key] || lv.hint}</span>
         </div>
-        ${list.map(regCard).join('')}
+        <div class="junk-grid">${list.map(regCard).join('')}</div>
       </div>`;
     }).filter(Boolean).join('');
   grid.innerHTML = levels || '<div class="empty">该安全等级下暂无项目</div>';
   updateRegButton();
+  applyRegBadges();
 }
+
+/* 网格被重渲染后把仍在展示期的徽标重新挂回卡片 */
+function applyRegBadges() { regBadges.forEach((_, id) => paintRegBadge(id)); }
 
 function regCard(c) {
   const on = state.reg.sel.has(c.id);
@@ -701,17 +836,18 @@ function updateRegButton() {
   const ready = ids.filter((id) => { const c = regCat(id); return c.scanned && c.count; });
   const items = ready.reduce((a, id) => a + (regCat(id).count || 0), 0);
   const btn = $('#btnRegClean');
-  btn.disabled = ready.length === 0;
+  btn.disabled = ready.length === 0 || pageLock.registry > 0;
   btn.innerHTML = `${icon('shield')}清理选中项${ready.length ? `（${ready.length} 组 · ${items} 项）` : ''}`;
 }
 
 $('#regGrid').addEventListener('click', (e) => {
+  if (pageLock.registry > 0) return;
   const card = e.target.closest('[data-reg]');
   if (!card) return;
   const id = card.dataset.reg;
   const cat = regCat(id);
   if (cat.admin && !state.overview.admin) {
-    toast('需要管理员权限', `“${cat.name}”需要管理员权限：请点击右上角「获取管理员权限」，在 UAC 提示中确认后会以管理员身份重新启动（本窗口会自动关闭）。`, 'warn', 9000);
+    toast('需要管理员权限', `“${cat.name}”需要管理员权限：请点击左下角「获取管理员权限」，在 UAC 提示中确认后会以管理员身份重启（本窗口会自动切换过去）。`, 'warn', 9000);
     return;
   }
   if (state.reg.sel.has(id)) state.reg.sel.delete(id); else state.reg.sel.add(id);
@@ -721,6 +857,7 @@ $('#regGrid').addEventListener('click', (e) => {
 });
 
 $$('[data-reglevel]').forEach((chip) => chip.addEventListener('click', () => {
+  if (pageLock.registry > 0) return;
   $$('[data-reglevel]').forEach((c) => c.classList.remove('on'));
   chip.classList.add('on');
   state.regLevel = chip.dataset.reglevel;
@@ -746,7 +883,6 @@ $('#btnRegSelectSafe').onclick = () => {
 };
 
 $('#btnRegScan').onclick = () => {
-  // Only the ticked projects are inspected; the rest stay "待扫描".
   const ids = [...state.reg.sel];
   if (!ids.length) {
     toast('请先选择项目', '勾选要检查的注册表项目（默认已选中安全项），再点击“扫描选中项”。', 'warn');
@@ -756,21 +892,26 @@ $('#btnRegScan').onclick = () => {
 };
 
 async function scanReg(ids) {
-  await runJob('/api/regclean/scan', { ids }, '扫描注册表残留', {
-    onDone: (j) => {
-      if (j.status !== 'done') return;
-      const res = j.result || {};
-      const byId = new Map((res.categories || []).map((c) => [c.id, c]));
-      state.reg.cats = state.reg.cats.map((c) => (byId.has(c.id) ? { ...c, ...byId.get(c.id), scanned: true } : c));
-      renderReg();
-      const found = res.total || 0;
-      $('#navRegPill').textContent = found ? `${found} 项` : '0';
-      $('#regNotice').innerHTML = found
-        ? `<div class="note ok" style="margin-top:12px">${icon('check', 'width:15px')}<div>本次扫描 ${ids.length} 组项目，发现 <b>${found}</b> 项可清理的注册表残留；结果已按安全等级排列。</div></div>`
-        : `<div class="note ok" style="margin-top:12px">${icon('check', 'width:15px')}<div>本次扫描 ${ids.length} 组项目，没有发现注册表残留。</div></div>`;
-      toast('注册表扫描完成', found ? `发现 ${found} 项可清理残留` : '未发现残留', 'ok');
-    },
-  });
+  setPageLock('registry', true);
+  try {
+    await runJob('/api/regclean/scan', { ids }, '扫描注册表残留', {
+      onDone: (j) => {
+        if (j.status !== 'done') return;
+        const res = j.result || {};
+        const byId = new Map((res.categories || []).map((c) => [c.id, c]));
+        state.reg.cats = state.reg.cats.map((c) => (byId.has(c.id) ? { ...c, ...byId.get(c.id), scanned: true } : c));
+        renderReg();
+        const found = res.total || 0;
+        $('#navRegPill').textContent = found ? `${found} 项` : '0';
+        $('#regNotice').innerHTML = found
+          ? `<div class="note ok" style="margin-top:12px">${icon('check', 'width:15px')}<div>本次扫描 ${ids.length} 组项目，发现 <b>${found}</b> 项可清理的注册表残留；结果已按安全等级排列。</div></div>`
+          : `<div class="note ok" style="margin-top:12px">${icon('check', 'width:15px')}<div>本次扫描 ${ids.length} 组项目，没有发现注册表残留。</div></div>`;
+        toast('注册表扫描完成', found ? `发现 ${found} 项可清理残留` : '未发现残留', 'ok');
+      },
+    });
+  } finally {
+    setPageLock('registry', false);
+  }
 }
 
 $('#btnRegClean').onclick = () => {
@@ -788,31 +929,53 @@ $('#btnRegClean').onclick = () => {
     return `<li>${esc(c.name || id)} <span class="badge ${c.risk}">${RISK_TEXT[c.risk] || c.risk}</span> · ${c.count || 0} 项</li>`;
   }).join('')}</ul>`;
   if (risky.length) body += `<div class="note warn" style="margin-top:12px">${icon('alert', 'width:15px')}<div>包含 ${risky.length} 组“注意/高级”项目。若清理后某个程序出现异常，可在数据目录的注册表备份中导入对应 .reg 文件恢复。</div></div>`;
-  if (adminNeeded.length && !state.overview.admin) body += `<div class="note warn" style="margin-top:12px">${icon('lock', 'width:15px')}<div>其中 ${adminNeeded.length} 组需要管理员权限，普通权限下会被自动跳过：请先点击右上角「获取管理员权限」，UAC 确认后本程序会以管理员身份重新启动，再执行即可。</div></div>`;
+  if (adminNeeded.length && !state.overview.admin) body += `<div class="note warn" style="margin-top:12px">${icon('lock', 'width:15px')}<div>其中 ${adminNeeded.length} 组需要管理员权限，普通权限下会被自动跳过：请先点击左下角「获取管理员权限」，UAC 确认后本程序会以管理员身份重新启动，再执行即可。</div></div>`;
   confirmModal({
     title: '确认清理注册表残留？', body, confirmText: '备份并清理', danger: true,
     onConfirm: async () => {
-      await runJob('/api/regclean/clean', { ids }, '清理注册表残留', {
-        onDone: (j) => {
-          if (j.status !== 'done') return;
-          const r = j.result || {};
-          const fails = (r.details || []).filter((d) => d.ok === false);
-          const skipped = r.skipped || 0;
-          if (fails.length) {
-            const reason = (fails[0].message || '').split('\n')[0].slice(0, 70);
-            toast('清理完成，部分未成功',
-              `${fails.length} 项未完成（${fails[0].category || ''}）：${reason}　｜　已删除 ${r.removed} 项`,
-              'warn', 12000);
-          } else {
-            toast('注册表清理完成',
-              `已删除 ${r.removed} 项${skipped ? `，跳过 ${skipped} 组需管理员权限的项目` : ''}；备份位于数据目录的 backups 下`,
-              'ok', 8000);
-          }
-          state.reg.sel.clear();
-          scanReg(ids);
-          loadOverview();
-        },
-      });
+      /* 后端按传入的 ids 顺序逐组执行，队列与之一致 */
+      const queue = ids.map((id) => ({ id, name: regCat(id).name }));
+      regBadges.clear();
+      queue.forEach((q) => setRegBadge(q.id, '等待中', 'waiting'));
+      let current = -1;
+      setPageLock('registry', true);
+      try {
+        await runJob('/api/regclean/clean', { ids }, '清理注册表残留', {
+          onProgress: (j) => {
+            const idx = matchQueueIndex(queue, current, j.message);
+            if (idx !== current) { current = idx; applyRunningBadges(queue, current, regBadges, paintRegBadge); }
+          },
+          onDone: (j) => {
+            if (j.status === 'done') {
+              /* 正常结束：用 per_category 补「已完成 · 删除 N 项 / 已跳过」 */
+              finalizeBadges(queue, (j.result || {}).per_category, regBadges, paintRegBadge,
+                (p) => (p.removed > 0 ? `已完成 · 删除 ${p.removed} 项` : ''),
+                (p) => (p.failed || 0) > 0 || String(p.message || '').includes('跳过'));
+            } else {
+              clearRegBadges();
+            }
+            if (j.status !== 'done') return;
+            const r = j.result || {};
+            const fails = (r.details || []).filter((d) => d.ok === false);
+            const skipped = r.skipped || 0;
+            if (fails.length) {
+              const reason = (fails[0].message || '').split('\n')[0].slice(0, 70);
+              toast('清理完成，部分未成功',
+                `${fails.length} 项未完成（${fails[0].category || ''}）：${reason}　｜　已删除 ${r.removed} 项`,
+                'warn', 12000);
+            } else {
+              toast('注册表清理完成',
+                `已删除 ${r.removed} 项${skipped ? `，跳过 ${skipped} 组需管理员权限的项目` : ''}；备份位于数据目录的 backups 下`,
+                'ok', 8000);
+            }
+            state.reg.sel.clear();
+            scanReg(ids);
+            loadOverview();
+          },
+        });
+      } finally {
+        setPageLock('registry', false);
+      }
     },
   });
 };
@@ -849,7 +1012,7 @@ function renderLarge() {
       <td class="num" style="font-weight:600">${esc(f.size_human)}</td>
       <td class="small muted">${timeStr(f.modified)}</td>
       <td class="actions">
-        <button class="btn sm" data-lmove="${i}">${icon('folder-move', 'width:13px')}转移</button>
+        <button class="btn sm primary" data-lmove="${i}">${icon('folder-move', 'width:13px')}转移</button>
         <button class="btn sm ghost" data-lopen="${i}" title="在资源管理器中打开">${icon('open', 'width:13px')}</button>
         <button class="btn sm danger" data-ldel="${i}" title="删除">${icon('trash', 'width:13px')}</button>
       </td>
@@ -895,8 +1058,6 @@ $('#btnLargeDelete').onclick = () => {
 async function moveFiles(paths) {
   const target = $('#largeTarget').value || state.target;
   if (!target) return toast('缺少目标盘', '请先在设置中选择目标磁盘', 'warn');
-  const size = state.large.files.filter((f) => paths.includes(f.path)).reduce((a, f) => a + f.size, 0) ||
-    paths.length * 0;
   openModal(`
     <div class="modal-head">${icon('folder-move', 'width:18px;color:var(--accent-2)')}<h3>转移 ${paths.length} 个文件到 ${esc(target)}</h3></div>
     <div class="modal-body">
@@ -958,6 +1119,7 @@ function deleteLarge(paths) {
 function updateSteps(n) {
   [1, 2, 3, 4].forEach((i) => {
     const el = $(`#step${i}`);
+    if (!el) return;
     el.classList.toggle('on', i === n);
     el.classList.toggle('done', i < n);
   });
@@ -1001,7 +1163,7 @@ function renderDrivePick(target) {
 }
 
 /* ------------------------------------------------- in-page folder picker */
-const fb = { path: '', parent: null, dirs: [], drives: [], selected: null, onPick: null, busy: false };
+const fb = { path: '', parent: null, dirs: [], drives: [], selected: null, onPick: null };
 
 async function browseFolder(initial, onPick) {
   fb.onPick = onPick || null;
@@ -1190,16 +1352,10 @@ async function loadApps(refresh = false) {
     const res = await api(`/api/apps${refresh ? '?refresh=true' : ''}`);
     state.apps.list = res.apps || [];
     $('#appsStats').textContent = `共 ${res.total} 个 · 可迁移 ${res.migratable} 个`;
-    detectRunning();
     renderApps();
   } catch (err) {
     $('#appsBody').innerHTML = `<tr><td colspan="8"><div class="empty">读取失败：${esc(err.message)}</div></td></tr>`;
   }
-}
-
-async function detectRunning() {
-  // best effort: mark apps whose folder is on C: and may be running (heuristic by folder name)
-  state.apps.running = new Set();
 }
 
 function appSortValue(a, key) {
@@ -1222,7 +1378,7 @@ function sortApps(list) {
       const av = a.estimated_size > 0 ? a.estimated_size : null;
       const bv = b.estimated_size > 0 ? b.estimated_size : null;
       if (av === null && bv === null) return byName();
-      if (av === null) return 1;   // unknown size always sinks to the bottom
+      if (av === null) return 1;
       if (bv === null) return -1;
       return (av - bv) * mul || byName();
     }
@@ -1249,21 +1405,20 @@ function renderApps() {
   if (q) list = list.filter((a) => `${a.name} ${a.publisher} ${a.folder} ${a.version}`.toLowerCase().includes(q));
   if (state.apps.filter === 'movable') list = list.filter((a) => a.migratable);
   if (state.apps.filter === 'locked') list = list.filter((a) => !a.migratable);
-  if (state.apps.filter === 'running') list = list.filter((a) => state.apps.running.has(a.id));
   list = sortApps(list);
   updateAppSortIndicators();
   if (!list.length) { $('#appsBody').innerHTML = `<tr><td colspan="8"><div class="empty">没有匹配的应用</div></td></tr>`; return; }
   $('#appsBody').innerHTML = list.slice(0, 400).map((a) => `
     <tr class="${a.migratable ? '' : 'dim'}">
-      <td><span class="check ${state.apps.sel.has(a.id) ? 'on' : ''}" data-appsel="${esc(a.id)}" ${a.migratable ? '' : 'style="opacity:.35"'}>${''}</span></td>
+      <td><span class="check ${state.apps.sel.has(a.id) ? 'on' : ''}" data-appsel="${esc(a.id)}" ${a.migratable ? '' : 'style="opacity:.35"'}></span></td>
       <td>
         <div style="font-weight:500">${esc(a.name)}</div>
         <div class="small muted nowrap" style="max-width:280px">${esc(a.source === 'folder' ? '未注册的应用目录' : (a.registry_key || ''))}</div>
       </td>
+      <td class="num small">${a.estimated_size ? esc(a.estimated_human) : `<button class="btn sm ghost" data-appsize="${esc(a.id)}">计算</button>`}</td>
       <td class="small dim nowrap" style="max-width:150px">${esc(a.publisher || '–')}</td>
       <td class="small dim">${esc(a.version || '–')}</td>
       <td class="mono small nowrap" style="max-width:300px" title="${esc(a.folder || '')}">${esc(a.folder ? shortPath(a.folder, 30, 22) : '未找到')}</td>
-      <td class="num small">${a.estimated_size ? esc(a.estimated_human) : `<button class="btn sm ghost" data-appsize="${esc(a.id)}">计算</button>`}</td>
       <td>${a.migratable ? '<span class="badge safe">可迁移</span>' : `<span class="badge plain" title="${esc(a.reason)}">${esc(a.reason || '不可迁移')}</span>`}</td>
       <td class="actions">
         <button class="btn sm" data-appanalyse="${esc(a.id)}">分析</button>
@@ -1286,7 +1441,6 @@ $$('[data-appsort]').forEach((th) => th.addEventListener('click', () => {
     s.dir = s.dir === 'asc' ? 'desc' : 'asc';
   } else {
     s.key = key;
-    // Size is most useful largest-first; text columns read naturally A→Z.
     s.dir = key === 'size' ? 'desc' : 'asc';
   }
   renderApps();
@@ -1378,24 +1532,15 @@ async function analyseApp(a, autoGo = false) {
 /* =========================================================================
    JOURNAL
    ========================================================================= */
-async function loadJournal() {
-  try {
-    const { records, stats } = await api('/api/journal');
-    state.journal = records;
-    $('#jnMoved').textContent = stats.migrated || 0;
-    $('#jnFreed').textContent = bytes(stats.freed_bytes || 0);
-    $('#jnCleans').textContent = stats.clean_runs || 0;
-    $('#jnCleanBytes').textContent = bytes(stats.cleaned_bytes || 0);
-    $('#navJournalPill').textContent = stats.total || 0;
-    if (!records.length) { $('#journalBody').innerHTML = `<tr><td colspan="8"><div class="empty">暂无记录</div></td></tr>`; return; }
-    $('#journalBody').innerHTML = records.map((r) => {
-      const k = typeLabel(r.action);
-      const canRevert = ['move_app', 'move_dir', 'move_file'].includes(r.action) && !r.reverted;
-      return `<tr>
-        <td class="small muted">${timeStr(r.time)}</td>
+const journalView = { page: 1, size: 10, q: '' };   /* 分页 + 搜索视图状态 */
+
+function journalRowHtml(r) {
+  const k = typeLabel(r.action);
+  const canRevert = ['move_app', 'move_dir', 'move_file'].includes(r.action) && !r.reverted;
+  return `<tr>
+        <td class="small muted nowrap">${timeStr(r.time)}</td>
         <td><span class="badge ${k.cls}">${k.text}</span></td>
-        <td><div class="nowrap" style="max-width:190px;font-weight:500" title="${esc(r.label || '')}">${esc(r.label || '–')}</div>
-            ${r.strategy ? `<div class="small muted">${esc(r.strategy)}</div>` : ''}</td>
+        <td><div class="nowrap" style="max-width:190px;font-weight:500" title="${esc([r.label, r.strategy].filter(Boolean).join(' · '))}">${esc(r.label || '–')}</div></td>
         <td class="mono small nowrap" style="max-width:210px" title="${esc(r.src || '')}">${esc(shortPath(r.src || '–', 24, 16))}</td>
         <td class="mono small nowrap" style="max-width:210px" title="${esc(r.dst || '')}">${esc(r.dst ? shortPath(r.dst, 24, 16) : '–')}</td>
         <td class="num small">${r.size_bytes ? esc(bytes(r.size_bytes)) : '–'}</td>
@@ -1405,11 +1550,49 @@ async function loadJournal() {
           ${canRevert ? `<button class="btn sm" data-jrevert="${esc(r.id)}">${icon('undo', 'width:13px')}还原</button>` : ''}
         </td>
       </tr>`;
-    }).join('');
+}
+
+function renderJournalPage() {
+  const q = journalView.q.trim().toLowerCase();
+  const all = (state.journal || []).filter((r) => !q || [typeLabel(r.action).text, r.label, r.strategy, r.src, r.dst]
+    .some((v) => v && String(v).toLowerCase().includes(q)));
+  const pages = Math.max(1, Math.ceil(all.length / journalView.size));
+  journalView.page = Math.min(Math.max(1, journalView.page), pages);
+  const rows = all.slice((journalView.page - 1) * journalView.size, journalView.page * journalView.size);
+  $('#journalBody').innerHTML = rows.length ? rows.map(journalRowHtml).join('')
+    : `<tr><td colspan="8"><div class="empty">${all.length ? '无匹配记录' : '暂无记录'}</div></td></tr>`;
+  $('#journalCount').textContent = `共 ${all.length} 条`;
+  $('#journalPager').innerHTML = all.length ? `
+    <button class="btn sm" data-jpage="prev" ${journalView.page <= 1 ? 'disabled' : ''}>上一页</button>
+    <span class="small muted">第 ${journalView.page} / ${pages} 页</span>
+    <button class="btn sm" data-jpage="next" ${journalView.page >= pages ? 'disabled' : ''}>下一页</button>` : '';
+  /* 容器高度贴合当前页实际行数：既不出纵向滚动条，也不留大片空位 */
+  const wrap = $('#journalWrap');
+  const table = wrap.querySelector('table');
+  if (table) wrap.style.height = (table.offsetHeight + 4) + 'px';
+}
+
+async function loadJournal() {
+  try {
+    const { records, stats } = await api('/api/journal');
+    state.journal = records;
+    $('#jnMoved').textContent = stats.migrated || 0;
+    $('#jnFreed').textContent = bytes(stats.freed_bytes || 0);
+    $('#jnCleans').textContent = stats.clean_runs || 0;
+    $('#jnCleanBytes').textContent = bytes(stats.cleaned_bytes || 0);
+    $('#navJournalPill').textContent = stats.total || 0;
+    renderJournalPage();
   } catch (e) { toast('读取记录失败', e.message, 'error'); }
 }
 
 $('#btnJournalRefresh').onclick = loadJournal;
+$('#journalSearch').oninput = (e) => { journalView.q = e.target.value; journalView.page = 1; renderJournalPage(); };
+$('#journalPager').onclick = (e) => {
+  const b = e.target.closest('[data-jpage]');
+  if (!b) return;
+  journalView.page += b.dataset.jpage === 'next' ? 1 : -1;
+  renderJournalPage();
+};
 $('#btnJournalClear').onclick = () => confirmModal({
   title: '清空所有记录？', body: '只删除记录文本，不影响已迁移的文件与注册表备份。',
   confirmText: '清空', danger: true,
@@ -1494,8 +1677,6 @@ $('#btnSaveSettings').onclick = (e) => {
 
 $('#btnRegistryBackup').onclick = (e) => {
   const btn = e.currentTarget;
-  // Exporting HKCU\\Software + HKLM\\SOFTWARE can take a minute or more, so run it
-  // as a background job: the progress bar reports while the button stays busy.
   return withBusy(btn, '备份中…', () =>
     runJob('/api/registry/backup', {}, '备份注册表', {
       onDone: (j) => {
@@ -1506,6 +1687,9 @@ $('#btnRegistryBackup').onclick = (e) => {
     }));
 };
 
+/* =========================================================================
+   ELEVATE（提权：UAC 确认后管理员副本接管，本窗口经主进程换绑到新后端）
+   ========================================================================= */
 ['#btnElevate', '#btnElevate2'].forEach((sel) => {
   const el = $(sel); if (!el) return;
   el.onclick = async () => {
@@ -1518,8 +1702,6 @@ $('#btnRegistryBackup').onclick = (e) => {
       toast(r.ok ? '正在以管理员身份重新启动' : '提升失败', r.message,
         r.ok ? 'ok' : 'error', 9000);
       if (r.ok) {
-        // The elevated copy takes over and this window closes itself, so keep
-        // the button busy; the timer only matters if the hand-over fails.
         el.innerHTML = '正在切换…';
         setTimeout(() => { el.disabled = false; el.innerHTML = label; }, 8000);
         return;
@@ -1534,8 +1716,6 @@ $('#btnRegistryBackup').onclick = (e) => {
 
 /* =========================================================================
    ABOUT
-   The GitHub repository is the only outward-facing part of the app, so it is
-   always handed to the system browser - never loaded inside the desktop window.
    ========================================================================= */
 const REPO_URL = 'https://github.com/soultt/CClear';
 
@@ -1545,11 +1725,9 @@ async function openExternal(url) {
     const r = await api('/api/open-url', { url });
     toast(r.ok ? '已在浏览器中打开' : '无法自动打开',
       r.ok ? url : (r.message || url), r.ok ? 'ok' : 'warn', 6000);
-    return;
   } catch (e) {
-    // Older backend without the endpoint - let the browser open a new tab.
+    toast('无法打开链接', e.message, 'error');
   }
-  try { window.open(url, '_blank', 'noopener'); } catch (e) { /* ignore */ }
 }
 
 async function copyText(text) {
@@ -1558,7 +1736,7 @@ async function copyText(text) {
       await navigator.clipboard.writeText(text);
       return true;
     }
-  } catch (e) { /* fall back to the legacy path below */ }
+  } catch (e) { /* fall back below */ }
   try {
     const ta = document.createElement('textarea');
     ta.value = text;
@@ -1581,8 +1759,7 @@ function fillAbout() {
   const ver = o.version ? `v${o.version}` : '–';
   $('#aboutBadgeVer').textContent = ver;
   $('#aboutVer').textContent = ver;
-  $('#aboutMode').textContent = document.body.classList.contains('embedded')
-    ? '独立窗口（内嵌 WebView2）' : '系统浏览器（网页界面）';
+  $('#aboutMode').textContent = '独立窗口（Electron）';
   $('#aboutAdmin').textContent = o.admin
     ? '已获得（DISM 等需要提升的操作可用）' : '普通权限（部分功能受限）';
   $('#aboutOs').textContent = os.name || '–';
@@ -1608,55 +1785,55 @@ $('#btnAboutLog').onclick = () => {
   if (p) api('/api/reveal', { path: p }).catch((e) => toast('打开失败', e.message, 'error'));
 };
 
+/* Default selection = every "safe" project (skip admin-only ones when the app
+   is not elevated). Called once on boot, so a later scan only touches what the
+   user can see ticked. */
+function selectSafeDefaults() {
+  state.junk.sel.clear();
+  state.junk.cats
+    .filter((c) => c.risk === 'safe' && !(c.admin && !state.overview.admin))
+    .forEach((c) => state.junk.sel.add(c.id));
+  state.reg.sel.clear();
+  state.reg.cats
+    .filter((c) => c.risk === 'safe' && !(c.admin && !state.overview.admin))
+    .forEach((c) => state.reg.sel.add(c.id));
+}
+
 /* =========================================================================
    WINDOW CHROME
-   The desktop window is frameless, so the page draws its own title bar. In a
-   plain browser (--browser, or missing WebView2) the bar stays hidden and the
-   browser's own controls are used instead.
+   无边框窗口：标题栏拖拽走 -webkit-app-region，缩放由边缘 grips 驱动
+   get_bounds / set_bounds；最大化状态由主进程推送（含原生双击、Win+方向键）。
    ========================================================================= */
-const cclearWindowApi = () => (window.pywebview && window.pywebview.api) || null;
-let cclearMaximized = false;
+let winMaximized = false;
 
 window.cclearSetMaximized = function (max) {
+  winMaximized = !!max;
   const btn = $('#winMax');
-  cclearMaximized = !!max;
-  if (!btn) return;
-  btn.innerHTML = `<svg><use href="#i-win-${max ? 'restore' : 'max'}"/></svg>`;
-  btn.title = max ? '向下还原' : '最大化';
-  btn.setAttribute('aria-label', btn.title);
+  if (btn) {
+    btn.innerHTML = `<svg><use href="#i-win-${max ? 'restore' : 'max'}"/></svg>`;
+    btn.title = max ? '向下还原' : '最大化';
+    btn.setAttribute('aria-label', btn.title);
+  }
+  // 最大化后窗口不可拖动，关掉 app-region
   const drag = $('#tbDrag');
-  // A maximized window must not be draggable, otherwise the title bar would
-  // try to move a full-screen window.
-  if (drag) drag.classList.toggle('pywebview-drag-region', !max);
+  if (drag) drag.style.webkitAppRegion = max ? 'no-drag' : 'drag';
 };
 
-function cclearMarkEmbedded() {
-  document.body.classList.add('embedded');
-  cclearWinCall('is_maximized').then((m) => { if (m !== null) window.cclearSetMaximized(!!m); });
-}
-
-function cclearWinCall(name, ...args) {
-  const api = cclearWindowApi();
-  if (!api || typeof api[name] !== 'function') return Promise.resolve(null);
-  try { return Promise.resolve(api[name](...args)).catch(() => null); }
-  catch (e) { return Promise.resolve(null); }
-}
-
-if (cclearWindowApi()) cclearMarkEmbedded();
-window.addEventListener('pywebviewready', cclearMarkEmbedded);
-
-$('#winMin').onclick = () => cclearWinCall('minimize');
-$('#winClose').onclick = () => cclearWinCall('close');
+$('#winMin').onclick = () => window.cclear.win.minimize();
+$('#winClose').onclick = () => window.cclear.win.close();
 $('#winMax').onclick = async () => {
-  const max = await cclearWinCall('toggle_maximize');
-  if (typeof max === 'boolean') window.cclearSetMaximized(max);
+  window.cclearSetMaximized(await window.cclear.win.toggle_maximize());
 };
-$('#tbDrag').addEventListener('dblclick', () => $('#winMax').click());
+// Electron 的拖拽区双击由系统原生处理（HTCAPTION → 最大化 / 还原），
+// 这里再点一次会与原生状态来回打架，所以不走 JS。
+$('#tbDrag').addEventListener('dblclick', () => {});
+window.cclear.win.on_maximized((m) => window.cclearSetMaximized(!!m));
+window.cclear.win.is_maximized().then((m) => { if (m) window.cclearSetMaximized(true); });
 
-/* -------------------------------------------------------------------------
-   Resize grips - the window has no native frame, so edge dragging is handled
-   here: grab a grip, then move/resize the real window to follow the pointer.
-   ------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------
+   Resize grips - the window has no native frame, so edge dragging is
+   handled here: grab a grip, then move/resize the real window.
+   --------------------------------------------------------------- */
 let grip = null;          // active drag: {edge, start, x, y, w, h, minW, minH}
 let gripFrame = 0;        // pending requestAnimationFrame id
 let gripNext = null;      // latest requested rect
@@ -1665,7 +1842,7 @@ function gripCommit() {
   gripFrame = 0;
   const r = gripNext;
   gripNext = null;
-  if (r) cclearWinCall('set_bounds', r[0], r[1], r[2], r[3]);
+  if (r) window.cclear.win.set_bounds(r[0], r[1], r[2], r[3]);
 }
 
 function gripDrag(e) {
@@ -1692,15 +1869,13 @@ function gripDrag(e) {
   if (!gripFrame) gripFrame = requestAnimationFrame(gripCommit);
 }
 
-function gripEnd() {
-  grip = null;
-}
+function gripEnd() { grip = null; }
 
 $$('.win-grips .grip').forEach((el) => {
   el.addEventListener('mousedown', async (e) => {
-    if (e.button !== 0 || cclearMaximized) return;
+    if (e.button !== 0 || winMaximized) return;
     e.preventDefault();
-    const bounds = await cclearWinCall('get_bounds');
+    const bounds = await window.cclear.win.get_bounds();
     if (!Array.isArray(bounds) || !bounds.length) return;
     grip = {
       edge: el.dataset.edge,
@@ -1713,37 +1888,6 @@ $$('.win-grips .grip').forEach((el) => {
 window.addEventListener('mousemove', gripDrag);
 window.addEventListener('mouseup', gripEnd);
 window.addEventListener('blur', gripEnd);
-
-/* =========================================================================
-   misc bindings
-   ========================================================================= */
-$('#btnRefresh').onclick = () => { loadOverview(); toast('已刷新', '', 'ok', 1600); };
-$('#btnRefreshDrives').onclick = () => loadOverview();
-$('#btnHotspots').onclick = async () => {
-  $('#hotspotList').innerHTML = '<div class="empty small">正在分析 C 盘目录占用，可能需要 1-2 分钟…</div>';
-  await runJob('/api/dir/hotspots', { root: 'C:\\', depth: 2 }, '分析磁盘占用', {
-    onDone: (j) => {
-      if (j.status !== 'done') { $('#hotspotList').innerHTML = '<div class="empty small">分析未完成</div>'; return; }
-      state.overview.hotspots = (j.result.tree || {}).children || [];
-      renderHotspots(j.result.tree);
-    },
-  });
-};
-/* the job bar's own buttons are bound per row in ensureJobRow() */
-
-/* Default selection = every "safe" project (skip admin-only ones when the app
-   is not elevated). Called once on boot, so a later scan only touches what the
-   user can see ticked. */
-function selectSafeDefaults() {
-  state.junk.sel.clear();
-  state.junk.cats
-    .filter((c) => c.risk === 'safe' && !(c.admin && !state.overview.admin))
-    .forEach((c) => state.junk.sel.add(c.id));
-  state.reg.sel.clear();
-  state.reg.cats
-    .filter((c) => c.risk === 'safe' && !(c.admin && !state.overview.admin))
-    .forEach((c) => state.reg.sel.add(c.id));
-}
 
 /* =========================================================================
    boot
@@ -1760,6 +1904,6 @@ function selectSafeDefaults() {
   renderReg();
   updateSteps(1);
   if (!state.overview.admin) {
-    toast('未获得管理员权限', '清理系统缓存、创建符号链接等功能需要管理员权限，可点击右上角按钮提升。', 'warn', 9000);
+    toast('未获得管理员权限', '清理系统缓存、创建符号链接等功能需要管理员权限，可点击左下角按钮提升。', 'warn', 9000);
   }
 })();

@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'" />
+<title>CClear · C 盘空间管家</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-dash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.6"/><rect x="14" y="3" width="7" height="5" rx="1.6"/><rect x="14" y="12" width="7" height="9" rx="1.6"/><rect x="3" y="16" width="7" height="5" rx="1.6"/></symbol>
+  <symbol id="i-broom" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4l6 6"/><path d="M17.5 6.5L9 15l-3.5 3.5a2.5 2.5 0 003.5 3.5L12.5 18.5"/><path d="M5 19l-1.5 1.5"/><path d="M9 15l-1-4 4 1"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 012-2h4l2 2.5h8a2 2 0 012 2V18a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></symbol>
+  <symbol id="i-folder-move" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 012-2h4l2 2.5h5a2 2 0 012 2V13"/><path d="M3 7v11a2 2 0 002 2h8"/><path d="M17 17h5m0 0l-2.5-2.5M22 17l-2.5 2.5"/></symbol>
+  <symbol id="i-app" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 109-9 9 9 0 00-7.4 3.9"/><path d="M3 4v4h4"/><path d="M12 8v4.5l3 1.8"/></symbol>
+  <symbol id="i-cog" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1A1.7 1.7 0 008.9 19a1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1A1.7 1.7 0 004.6 8.9a1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 4v7h-7"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2"/><path d="M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12"/><path d="M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5l12 7-12 7z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9.5 17H2.5z"/><path d="M12 9v5M12 17.2v.2"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.2"/></symbol>
+  <symbol id="i-disk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.4-3 8-7 9-4-1-7-4.6-7-9V6z"/><path d="M9.5 12l1.8 1.8 3.2-3.6"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h9a6 6 0 110 12H8"/><path d="M4 9l4-4M4 9l4 4"/></symbol>
+  <symbol id="i-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-8.5 8.5"/><path d="M18 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h4"/></symbol>
+  <symbol id="i-folder-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 012-2h4l2 2.5h6a2 2 0 012 2V10"/><path d="M3 9.5h16.2a1.6 1.6 0 011.5 2l-1.5 6.4a2 2 0 01-2 1.6H5a2 2 0 01-2-2z"/></symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-package" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 118 0v3"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-github" viewBox="0 0 16 16" fill="currentColor" stroke="none"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 5.5A1.5 1.5 0 0013.5 4H6a2 2 0 00-2 2v7.5A1.5 1.5 0 005.5 15"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4.5 13.5H11l-1 8.5L18.5 10H12z"/></symbol>
+  <symbol id="i-win-min" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M5.5 12.5h13"/></symbol>
+  <symbol id="i-win-max" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5.5" y="5.5" width="13" height="13" rx="1.6"/></symbol>
+  <symbol id="i-win-restore" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="4.5" y="8.5" width="11" height="11" rx="1.6"/><path d="M8.5 8.5v-2.4a1.6 1.6 0 011.6-1.6h7.8a1.6 1.6 0 011.6 1.6v7.8a1.6 1.6 0 01-1.6 1.6h-2.4"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+</svg>
+
+<!-- ================= 自建窗头（frameless 窗口） ================= -->
+<div class="titlebar" id="titlebar">
+  <div class="tb-drag" id="tbDrag" title="拖动可移动窗口，双击可最大化 / 还原">
+    <span class="tb-mark">C</span>
+    <span class="tb-title">CClear · C 盘空间管家</span>
+  </div>
+  <div class="tb-actions">
+    <button class="tb-btn" id="winMin" title="最小化" aria-label="最小化"><svg><use href="#i-win-min"/></svg></button>
+    <button class="tb-btn" id="winMax" title="最大化" aria-label="最大化"><svg><use href="#i-win-max"/></svg></button>
+    <button class="tb-btn tb-close" id="winClose" title="关闭" aria-label="关闭"><svg><use href="#i-x"/></svg></button>
+  </div>
+</div>
+
+<!-- 自建缩放边框：窗口没有原生边框，边缘拖拽由页面接管 -->
+<div class="win-grips" id="winGrips" aria-hidden="true">
+  <div class="grip" data-edge="n"></div>
+  <div class="grip" data-edge="s"></div>
+  <div class="grip" data-edge="w"></div>
+  <div class="grip" data-edge="e"></div>
+  <div class="grip" data-edge="nw"></div>
+  <div class="grip" data-edge="sw"></div>
+  <div class="grip" data-edge="se"></div>
+</div>
+
+<div class="shell">
+  <!-- ================= sidebar ================= -->
+  <aside class="sidebar">
+    <div class="nav-label" style="margin-top:2px">空间治理</div>
+    <div class="nav-item active" data-page="overview"><svg><use href="#i-dash"/></svg><span>总览</span></div>
+    <div class="nav-item" data-page="cleaner"><svg><use href="#i-broom"/></svg><span>垃圾清理</span><span class="pill" id="navCleanPill">–</span></div>
+    <div class="nav-item" data-page="registry"><svg><use href="#i-shield"/></svg><span>注册表清理</span><span class="pill" id="navRegPill">–</span></div>
+    <div class="nav-item" data-page="large"><svg><use href="#i-file"/></svg><span>大文件转移</span></div>
+    <div class="nav-item" data-page="dir"><svg><use href="#i-folder-move"/></svg><span>目录迁移</span></div>
+    <div class="nav-item" data-page="apps"><svg><use href="#i-app"/></svg><span>应用迁移</span></div>
+
+    <div class="nav-label">记录与配置</div>
+    <div class="nav-item" data-page="journal"><svg><use href="#i-history"/></svg><span>迁移记录</span><span class="pill" id="navJournalPill">0</span></div>
+    <div class="nav-item" data-page="settings"><svg><use href="#i-cog"/></svg><span>设置</span></div>
+    <div class="nav-item" data-page="about"><svg><use href="#i-info"/></svg><span>关于</span></div>
+
+    <div class="sidebar-foot">
+      <div class="admin-box" id="adminBox">
+        <div class="admin-status" id="sideAdmin">…</div>
+        <button class="btn sm full" id="btnElevate" style="display:none"><svg><use href="#i-shield"/></svg>获取管理员权限</button>
+      </div>
+      <div class="foot-kv" id="sideTarget">未设置目标盘</div>
+      <div class="foot-kv dim" id="sideVersion">CClear</div>
+      <a class="side-link" href="https://github.com/soultt/CClear"
+         data-external="https://github.com/soultt/CClear" rel="noopener"
+         title="在系统浏览器中打开 GitHub 仓库">
+        <svg><use href="#i-github"/></svg><span>github.com/soultt/CClear</span>
+      </a>
+    </div>
+  </aside>
+
+  <!-- ================= content ================= -->
+  <main class="content" id="content">
+
+    <!-- ================= 总览 ================= -->
+    <section class="page active" id="page-overview">
+      <div class="hero">
+        <div class="ring" id="heroRing" style="--p:0"><div class="inner"><div class="pct" id="heroPct">–</div><div class="cap">系统盘占用</div></div></div>
+        <div style="flex:1;min-width:280px">
+          <h2 id="heroTitle">正在读取磁盘信息…</h2>
+          <p id="heroText">CClear 可以清理垃圾缓存、把大文件与目录迁到其他磁盘，并自动同步注册表与快捷方式，迁移后原位置会留下目录联接，程序照常运行。</p>
+          <div class="row" style="margin-top:14px">
+            <button class="btn primary" data-goto="cleaner"><svg><use href="#i-broom"/></svg>扫描垃圾文件</button>
+            <button class="btn" data-goto="large"><svg><use href="#i-file"/></svg>查找大文件</button>
+            <button class="btn" data-goto="apps"><svg><use href="#i-app"/></svg>迁移应用</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid cols-4" style="margin-top:16px">
+        <div class="card stat"><div class="label">系统盘剩余</div><div class="value ok" id="stFree">–</div><div class="hint" id="stFreeHint">–</div></div>
+        <div class="card stat"><div class="label">可清理垃圾</div><div class="value accent" id="stJunk">未扫描</div><div class="hint" id="stJunkHint">点击“扫描垃圾文件”开始估算</div></div>
+        <div class="card stat"><div class="label">已迁移并释放</div><div class="value" id="stFreed">0 B</div><div class="hint" id="stFreedHint">共 0 次迁移</div></div>
+        <div class="card stat"><div class="label">系统文件占用</div><div class="value warn" id="stSysFiles">–</div><div class="hint">分页文件 / 休眠文件</div></div>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:16px">
+        <div class="card">
+          <div class="card-head"><svg style="width:17px;color:var(--accent-2)"><use href="#i-disk"/></svg><h3>磁盘概况</h3>
+            <div class="right"><button class="btn sm ghost" id="btnRefreshDrives" title="刷新"><svg><use href="#i-refresh"/></svg></button></div>
+          </div>
+          <div id="driveList"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><svg style="width:17px;color:var(--accent-2)"><use href="#i-chart"/></svg><h3>C 盘空间都去哪了</h3>
+            <div class="right"><button class="btn sm" id="btnHotspots"><svg><use href="#i-play"/></svg>开始分析</button></div>
+          </div>
+          <div class="bar-list" id="hotspotList"><div class="empty small">点击“开始分析”，统计 C 盘各级目录的占用情况</div></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-head"><svg style="width:17px;color:var(--accent-2)"><use href="#i-bolt"/></svg><h3>快捷操作</h3></div>
+        <div class="mini-actions">
+          <div class="mini" data-goto="cleaner"><div class="ico"><svg><use href="#i-broom"/></svg></div><div><strong>一键清理垃圾</strong><span>临时文件 / 缓存 / 回收站</span></div></div>
+          <div class="mini" data-goto="large"><div class="ico"><svg><use href="#i-file"/></svg></div><div><strong>转移大文件</strong><span>扫描并搬到其他磁盘</span></div></div>
+          <div class="mini" data-goto="dir"><div class="ico"><svg><use href="#i-folder-move"/></svg></div><div><strong>迁移目录</strong><span>联接 + 注册表同步</span></div></div>
+          <div class="mini" data-goto="apps"><div class="ico"><svg><use href="#i-app"/></svg></div><div><strong>迁移应用</strong><span>程序目录整体搬家</span></div></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-head"><h3>最近操作</h3><div class="right"><button class="btn sm ghost" data-goto="journal">查看全部</button></div></div>
+        <div id="recentList"><div class="empty small">暂无操作记录</div></div>
+      </div>
+    </section>
+
+    <!-- ================= 垃圾清理 ================= -->
+    <section class="page" id="page-cleaner">
+      <header class="page-head">
+        <div><h1>垃圾清理</h1><p>临时文件 / 缓存 / 回收站清理 · 项目按「安全 → 注意 → 高级」排列</p></div>
+        <div class="head-actions">
+          <button class="btn sm" id="btnSelectSafe">仅选安全项</button>
+          <button class="btn sm" id="btnSelectAll">全选</button>
+          <button class="btn sm" id="btnSelectNone">清空</button>
+        </div>
+      </header>
+      <div class="card">
+        <div class="row" style="margin-bottom:14px">
+          <div class="chip on" data-group="全部">全部</div>
+          <div class="chip" data-group="临时文件">临时文件</div>
+          <div class="chip" data-group="系统缓存">系统缓存</div>
+          <div class="chip" data-group="隐私清理">隐私清理</div>
+          <div class="chip" data-group="浏览器">浏览器</div>
+          <div class="chip" data-group="开发缓存">开发缓存</div>
+          <div class="spacer"></div>
+          <button class="btn" id="btnJunkScan"><svg><use href="#i-search"/></svg>扫描选中项</button>
+          <button class="btn primary" id="btnJunkClean" disabled><svg><use href="#i-broom"/></svg>清理选中项</button>
+        </div>
+        <div class="sub-hint">扫描只检查已勾选的项目；清理前请确认没有正在运行的安装程序。</div>
+        <div id="junkNotice"></div>
+        <div id="junkGrid"><div class="empty">点击“扫描选中项”开始分析可清理内容（默认已勾选安全项）</div></div>
+      </div>
+    </section>
+
+    <!-- ================= 注册表清理 ================= -->
+    <section class="page" id="page-registry">
+      <header class="page-head">
+        <div><h1>注册表清理</h1><p>只列出指向已不存在文件的注册表残留，清理前会自动导出备份</p></div>
+        <div class="head-actions">
+          <button class="btn sm" id="btnRegSelectSafe">仅选安全项</button>
+          <button class="btn sm" id="btnRegSelectAll">全选</button>
+          <button class="btn sm" id="btnRegSelectNone">清空</button>
+        </div>
+      </header>
+      <div class="card">
+        <div class="row" style="margin-bottom:14px">
+          <div class="chip on" data-reglevel="全部">全部</div>
+          <div class="chip" data-reglevel="safe"><span class="dot safe"></span>安全</div>
+          <div class="chip" data-reglevel="caution"><span class="dot caution"></span>注意</div>
+          <div class="chip" data-reglevel="advanced"><span class="dot advanced"></span>高级</div>
+          <div class="spacer"></div>
+          <button class="btn" id="btnRegScan"><svg><use href="#i-search"/></svg>扫描选中项</button>
+          <button class="btn primary" id="btnRegClean" disabled><svg><use href="#i-shield"/></svg>清理选中项</button>
+        </div>
+        <div class="note"><svg style="width:15px"><use href="#i-info"/></svg>
+          <div>安全项只涉及已失效的启动项、应用路径与隐私记录，可直接清理；<b>注意</b>项会删除卸载信息，请先确认程序确实已卸载；
+            <b>高级</b>项涉及 COM 组件注册，建议保留备份一段时间。扫描只会检查当前勾选的项目。</div>
+        </div>
+        <div id="regNotice"></div>
+        <div id="regGrid" style="margin-top:14px"><div class="empty">点击“扫描选中项”检查注册表残留</div></div>
+      </div>
+    </section>
+
+    <!-- ================= 大文件 ================= -->
+    <section class="page" id="page-large">
+      <header class="page-head">
+        <div><h1>大文件转移</h1><p>找出占用空间的大文件，搬到其他磁盘，并在原位置创建符号链接或直接删除</p></div>
+      </header>
+      <div class="card">
+        <div class="row">
+          <span class="dim small">最小体积</span>
+          <select id="largeMin">
+            <option value="100">100 MB</option>
+            <option value="200" selected>200 MB</option>
+            <option value="500">500 MB</option>
+            <option value="1024">1 GB</option>
+            <option value="2048">2 GB</option>
+          </select>
+          <label class="switch"><input type="checkbox" id="largeWindows"><span class="track"></span><span class="small dim">包含 C:\Windows 目录</span></label>
+          <div class="spacer"></div>
+          <span class="badge plain" id="largeStats">尚未扫描</span>
+          <button class="btn" id="btnLargeScan"><svg><use href="#i-search"/></svg>扫描大文件</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>扫描结果</h3>
+          <div class="right">
+            <span class="badge info" id="largeSelInfo">未选择</span>
+            <select id="largeTarget" class="small"></select>
+            <button class="btn sm" id="btnLargeMove"><svg><use href="#i-folder-move"/></svg>转移到目标盘</button>
+            <button class="btn sm danger" id="btnLargeDelete"><svg><use href="#i-trash"/></svg>删除</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th style="width:34px"><span class="check" id="largeCheckAll"></span></th>
+              <th>文件名</th><th>所在目录</th><th class="num" style="width:96px">大小</th>
+              <th style="width:132px">修改时间</th><th class="actions" style="width:150px">操作</th>
+            </tr></thead>
+            <tbody id="largeBody"><tr><td colspan="6"><div class="empty">还没有扫描结果</div></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 目录迁移 ================= -->
+    <section class="page" id="page-dir">
+      <header class="page-head">
+        <div><h1>目录迁移</h1><p>目录搬家 · 目录联接 · 注册表同步</p></div>
+      </header>
+      <div class="steps">
+        <div class="step-chip on" id="step1"><span class="n">1</span>选择目录</div>
+        <div class="step-chip" id="step2"><span class="n">2</span>选择目标盘</div>
+        <div class="step-chip" id="step3"><span class="n">3</span>分析方案</div>
+        <div class="step-chip" id="step4"><span class="n">4</span>执行迁移</div>
+      </div>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <div class="card-head"><h3>1 · 要迁移的目录</h3></div>
+          <div class="row">
+            <input type="text" id="dirSrc" placeholder="例如 C:\Users\new\Downloads" style="flex:1" />
+            <button class="btn" id="btnPickDir"><svg><use href="#i-folder-open"/></svg>浏览</button>
+          </div>
+          <div class="row small" style="margin-top:12px" id="dirQuick"></div>
+          <div class="note" style="margin-top:12px"><svg style="width:15px"><use href="#i-info"/></svg>
+            <div>迁移完成后，原位置会创建一个 <b>目录联接（Junction）</b>，程序与快捷方式无需改动即可继续访问；同时会自动检索并改写注册表中的相关路径。</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>2 · 目标磁盘</h3></div>
+          <div class="drive-pick" id="dirDrives"></div>
+          <label class="switch" style="margin-top:14px"><input type="checkbox" id="optLink" checked><span class="track"></span><span class="small dim">创建目录联接（推荐，保持兼容）</span></label>
+          <label class="switch" style="margin-top:10px"><input type="checkbox" id="optRegistry" checked><span class="track"></span><span class="small dim">同步注册表中的路径引用（含自动备份）</span></label>
+          <label class="switch" style="margin-top:10px"><input type="checkbox" id="optHash"><span class="track"></span><span class="small dim">校验文件指纹（更慢但更保险）</span></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>3 · 分析结果</h3>
+          <div class="right">
+            <button class="btn" id="btnDirPlan"><svg><use href="#i-search"/></svg>分析迁移方案</button>
+            <button class="btn primary" id="btnDirGo" disabled><svg><use href="#i-play"/></svg>开始迁移</button>
+          </div>
+        </div>
+        <div id="dirPlan"><div class="empty small">选择目录与目标磁盘后点击“分析迁移方案”</div></div>
+      </div>
+    </section>
+
+    <!-- ================= 应用迁移 ================= -->
+    <section class="page" id="page-apps">
+      <header class="page-head">
+        <div><h1>应用迁移</h1><p>从注册表读取已安装程序，整体迁移并同步注册表、快捷方式与服务路径</p></div>
+        <div class="head-actions">
+          <span class="badge plain" id="appsStats">–</span>
+          <button class="btn sm" id="btnAppsRefresh"><svg><use href="#i-refresh"/></svg>重新读取</button>
+        </div>
+      </header>
+      <div class="card">
+        <div class="row">
+          <div style="position:relative;flex:1;min-width:200px">
+            <input type="text" id="appSearch" placeholder="搜索应用名称 / 发布者 / 目录…" style="padding-left:34px;width:100%" />
+            <svg style="width:15px;position:absolute;left:11px;top:11px;color:var(--text-mute)"><use href="#i-search"/></svg>
+          </div>
+          <div class="chip on" data-appfilter="all">全部</div>
+          <div class="chip" data-appfilter="movable">可迁移</div>
+          <div class="chip" data-appfilter="locked">不可迁移</div>
+          <div class="spacer"></div>
+          <select id="appTarget" class="small"></select>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th style="width:34px"></th>
+              <th class="sortable" data-appsort="name">应用<span class="sarrow"></span></th>
+              <th class="num sortable" data-appsort="size" style="width:92px">大小<span class="sarrow"></span></th>
+              <th class="sortable" data-appsort="publisher">发布者<span class="sarrow"></span></th>
+              <th class="sortable" data-appsort="version">版本<span class="sarrow"></span></th>
+              <th>安装目录</th>
+              <th class="sortable" data-appsort="status" style="width:110px">状态<span class="sarrow"></span></th>
+              <th class="actions" style="width:190px">操作</th>
+            </tr></thead>
+            <tbody id="appsBody"><tr><td colspan="8"><div class="empty">正在读取已安装应用…</div></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 记录 ================= -->
+    <section class="page" id="page-journal">
+      <header class="page-head">
+        <div><h1>迁移记录</h1><p>每条迁移记录都可在数据未被修改的情况下自动还原</p></div>
+        <div class="head-actions">
+          <button class="btn sm" id="btnJournalRefresh"><svg><use href="#i-refresh"/></svg>刷新</button>
+          <button class="btn sm danger" id="btnJournalClear"><svg><use href="#i-trash"/></svg>清空记录</button>
+        </div>
+      </header>
+      <div class="grid cols-4">
+        <div class="card stat"><div class="label">迁移次数</div><div class="value" id="jnMoved">0</div></div>
+        <div class="card stat"><div class="label">已释放空间</div><div class="value accent" id="jnFreed">0 B</div></div>
+        <div class="card stat"><div class="label">清理次数</div><div class="value" id="jnCleans">0</div></div>
+        <div class="card stat"><div class="label">清理释放</div><div class="value ok" id="jnCleanBytes">0 B</div></div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="row" style="margin-bottom:12px">
+          <input type="text" id="journalSearch" placeholder="搜索类型 / 名称 / 路径…" style="flex:1;max-width:320px" />
+          <span class="spacer"></span>
+          <span class="small muted" id="journalCount"></span>
+        </div>
+        <div class="table-wrap" id="journalWrap">
+          <table>
+            <thead><tr>
+              <th style="width:146px">时间</th><th style="width:96px">类型</th><th>名称</th>
+              <th>源路径</th><th>目标路径</th><th class="num" style="width:90px">大小</th>
+              <th style="width:96px">状态</th><th class="actions" style="width:160px">操作</th>
+            </tr></thead>
+            <tbody id="journalBody"><tr><td colspan="8"><div class="empty">暂无记录</div></td></tr></tbody>
+          </table>
+        </div>
+        <div class="pager" id="journalPager" style="margin-top:12px"></div>
+      </div>
+    </section>
+
+    <!-- ================= 设置 ================= -->
+    <section class="page" id="page-settings">
+      <header class="page-head">
+        <div><h1>设置</h1><p>迁移默认值与安全维护</p></div>
+      </header>
+      <div class="grid cols-2">
+        <div class="card">
+          <div class="card-head"><h3>迁移默认值</h3></div>
+          <div class="row"><span class="dim" style="width:150px">默认目标磁盘</span><select id="setTarget"></select></div>
+          <div class="row" style="margin-top:12px"><span class="dim" style="width:150px">目录迁移分组</span><input type="text" id="setGroup" style="flex:1" /></div>
+          <div class="row" style="margin-top:12px"><span class="dim" style="width:150px">应用迁移分组</span><input type="text" id="setAppGroup" style="flex:1" /></div>
+          <div class="row" style="margin-top:12px"><span class="dim" style="width:150px">大文件阈值 (MB)</span><input type="number" id="setMinMb" min="10" style="width:110px" /></div>
+          <div style="margin-top:16px;display:flex;flex-direction:column;gap:12px">
+            <label class="switch"><input type="checkbox" id="setLink"><span class="track"></span><span class="small dim">迁移后创建目录联接（强烈推荐）</span></label>
+            <label class="switch"><input type="checkbox" id="setRegistry"><span class="track"></span><span class="small dim">自动同步注册表路径引用</span></label>
+            <label class="switch"><input type="checkbox" id="setHash"><span class="track"></span><span class="small dim">默认启用文件指纹校验</span></label>
+            <label class="switch"><input type="checkbox" id="setKill"><span class="track"></span><span class="small dim">迁移应用前自动结束其进程</span></label>
+          </div>
+          <div class="row" style="margin-top:18px"><button class="btn primary" id="btnSaveSettings">保存设置</button></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>安全与维护</h3></div>
+          <div class="note"><svg style="width:15px"><use href="#i-shield"/></svg>
+            <div>迁移前会自动把受影响的注册表项导出到数据目录，即使出现问题也可以用“迁移记录 → 还原”一键回退。</div>
+          </div>
+          <dl class="kv" style="margin-top:16px">
+            <dt>数据目录</dt><dd class="mono" id="setDataDir">–</dd>
+            <dt>注册表备份</dt><dd class="mono" id="setBackupDir">–</dd>
+            <dt>管理员权限</dt><dd id="setAdmin">–</dd>
+            <dt>系统盘</dt><dd id="setSysDrive">–</dd>
+            <dt>运行环境</dt><dd id="setOs">–</dd>
+          </dl>
+          <div class="row" style="margin-top:18px">
+            <button class="btn" id="btnRegistryBackup"><svg><use href="#i-shield"/></svg>立即备份注册表</button>
+            <button class="btn" id="btnElevate2"><svg><use href="#i-shield"/></svg>以管理员身份重启</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-head"><h3>使用须知 / 风险提示</h3></div>
+        <div style="display:flex;flex-direction:column;gap:10px;color:var(--text-dim);font-size:13px;line-height:1.75">
+          <div>1. <b>迁移前请关闭相关程序</b>。被占用的文件无法移动，脚本会跳过并给出提示。</div>
+          <div>2. <b>目录联接</b>是 NTFS 特性，目标磁盘必须是 NTFS 分区；若不用联接，务必确认已同步注册表。</div>
+          <div>3. <b>受保护目录</b>（Windows、WinSxS、WindowsApps、Program Files 根目录等）禁止迁移。</div>
+          <div>4. 迁移只是把数据换到其他分区，如果目标磁盘是可移动磁盘，拔掉后将无法访问。</div>
+          <div>5. 建议先在虚拟机或不重要的数据上验证流程，再进行大规模迁移。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 关于 ================= -->
+    <section class="page" id="page-about">
+      <header class="page-head">
+        <div><h1>关于</h1><p>版本信息 · 开源仓库</p></div>
+      </header>
+      <div class="card">
+        <div class="about-head">
+          <div class="about-mark">C</div>
+          <div class="about-text">
+            <div class="about-name">CClear · C 盘空间管家
+              <span class="badge plain" id="aboutBadgeVer">v–</span>
+            </div>
+            <div class="about-sub">本地运行的 Windows 磁盘空间治理工具：清理垃圾缓存、把大文件 / 目录 / 应用迁移到其他磁盘，
+              并自动同步注册表与快捷方式。全部操作都在本机完成，不联网、不上传任何数据。</div>
+          </div>
+          <div class="about-actions">
+            <button class="btn primary" id="btnGithub"><svg><use href="#i-github"/></svg>打开 GitHub 仓库</button>
+            <button class="btn" id="btnGithubCopy"><svg><use href="#i-copy"/></svg>复制仓库地址</button>
+          </div>
+        </div>
+
+        <div class="repo-box">
+          <svg class="repo-mark"><use href="#i-github"/></svg>
+          <div class="repo-text">
+            <div class="repo-url mono" id="aboutRepoUrl">https://github.com/soultt/CClear</div>
+            <div class="small muted">源码、问题反馈与更新说明 · 以 MIT 许可证开源</div>
+          </div>
+          <a class="btn sm ghost" id="aboutIssues" href="https://github.com/soultt/CClear/issues"
+             data-external="https://github.com/soultt/CClear/issues" rel="noopener">问题反馈</a>
+          <a class="btn sm ghost" id="aboutReleases" href="https://github.com/soultt/CClear/releases"
+             data-external="https://github.com/soultt/CClear/releases" rel="noopener">更新说明</a>
+        </div>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:16px">
+        <div class="card">
+          <div class="card-head"><h3>版本与运行环境</h3></div>
+          <dl class="kv">
+            <dt>版本</dt><dd class="mono" id="aboutVer">–</dd>
+            <dt>启动模式</dt><dd id="aboutMode">–</dd>
+            <dt>管理员权限</dt><dd id="aboutAdmin">–</dd>
+            <dt>操作系统</dt><dd id="aboutOs">–</dd>
+            <dt>运行环境</dt><dd class="mono" id="aboutRuntime">–</dd>
+            <dt>系统盘</dt><dd id="aboutSysDrive">–</dd>
+          </dl>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>本机数据</h3></div>
+          <dl class="kv">
+            <dt>数据目录</dt><dd class="mono" id="aboutDataDir">–</dd>
+            <dt>注册表备份</dt><dd class="mono" id="aboutBackupDir">–</dd>
+            <dt>运行日志</dt><dd class="mono" id="aboutLog">–</dd>
+          </dl>
+          <div class="row" style="margin-top:18px">
+            <button class="btn sm" id="btnAboutData"><svg><use href="#i-folder-open"/></svg>打开数据目录</button>
+            <button class="btn sm ghost" id="btnAboutLog"><svg><use href="#i-file"/></svg>查看运行日志</button>
+          </div>
+          <div class="note" style="margin-top:16px"><svg><use href="#i-info"/></svg>
+            <div>扫描结果、迁移记录与注册表备份都只保存在上面这几个目录里，删除数据目录即等于恢复出厂状态。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-head"><h3>关于 CClear</h3></div>
+        <div style="display:flex;flex-direction:column;gap:10px;color:var(--text-dim);font-size:13px;line-height:1.75">
+          <div>1. <b>本地优先</b>：界面是独立的 Electron 桌面应用，扫描与迁移全部在本机执行，不向网络发送任何数据。</div>
+          <div>2. <b>迁移可回滚</b>：每次迁移都会写入「迁移记录」，并在动手前导出受影响的注册表项，出问题可一键还原。</div>
+          <div>3. <b>开源</b>：项目托管在
+            <a id="aboutRepoLink" href="https://github.com/soultt/CClear"
+               data-external="https://github.com/soultt/CClear" rel="noopener">github.com/soultt/CClear</a>，
+            以 MIT 许可证发布，欢迎提交问题与建议。</div>
+          <div>4. <b>免责声明</b>：清理与迁移会真实修改磁盘与注册表，请先阅读「设置 → 使用须知 / 风险提示」，重要数据务必提前备份。</div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ================= job dock ================= -->
+<div class="jobdock" id="jobdock">
+  <div class="jobdock-inner" id="jobRows"></div>
+  <div class="job-log" id="jobLog" style="display:none"></div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div class="overlay" id="overlay"><div class="modal" id="modal"></div></div>
+
+<script src="app.js"></script>
+</body>
+</html>

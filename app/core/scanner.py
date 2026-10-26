@@ -172,30 +172,31 @@ def scan_hotspots(
                 continue
         node["size"] = direct
         sub_total = 0
-        if children:
-            scored = []
-            for path, _ in children:
-                if cancel and cancel() or time.monotonic() > deadline:
-                    break
-                s, _c = dir_size(path, budget_seconds=max(3, max_seconds / 6))
-                scored.append((path, s))
-                sub_total += s
-            node["size"] += sub_total
-            scored.sort(key=lambda x: -x[1])
+        scored: list[tuple[str, int]] = []
+        for path, _ in children:
+            if cancel and cancel() or time.monotonic() > deadline:
+                break
+            s, _c = dir_size(path, budget_seconds=max(3, max_seconds / 6))
+            scored.append((path, s))
+            sub_total += s
+        node["size"] += sub_total
+        scored.sort(key=lambda x: -x[1])
+        # Keep the recursive breakdown: previously the nested analyse() results
+        # were computed and then thrown away (only the flat list was returned),
+        # which made depth=2 orders of magnitude slower for no benefit.
+        for path, s in scored[:top]:
             if level < depth:
-                for path, s in scored[:top]:
-                    child = analyse(path, level + 1)
-                    children.append(child)
-                    if report:
-                        report(min(99.0, 5 + len(node["children"]) * 3),
-                               f"正在分析 {child['path']}")
-            node["children"] = sorted(
-                [{"name": os.path.basename(p) or p, "path": p, "size": s,
-                  "size_human": human_size(s)} for p, s in scored[:top]],
-                key=lambda c: -c["size"],
-            )
-        else:
-            node["children"] = []
+                child = analyse(path, level + 1)
+                child["size"] = max(child["size"], s)
+                child["size_human"] = human_size(child["size"])
+            else:
+                child = {"name": os.path.basename(path) or path, "path": path,
+                         "size": s, "size_human": human_size(s),
+                         "children": [], "level": level + 1}
+            node["children"].append(child)
+            if report:
+                report(min(99.0, 5 + len(node["children"]) * 3),
+                       f"正在分析 {child['path']}")
         node["size_human"] = human_size(node["size"])
         return node
 

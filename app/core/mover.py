@@ -12,16 +12,21 @@ from .util import (dir_size, fingerprint, free_space, human_size, is_reparse_poi
                    lexists, long_path, path_in, sanitize_name, unique_path)
 from . import winutil
 
-# Paths that must never be migrated wholesale.
+# Paths that must never be migrated wholesale. Windows is not always on C:,
+# so build these from %SystemDrive% instead of hard-coding the usual letter.
+_DRIVE = winutil.system_drive().lower()
 FORBIDDEN = {
-    "c:", "c:\\windows", "c:\\program files", "c:\\program files (x86)",
-    "c:\\programdata", "c:\\users", "c:\\users\\public", "c:\\perflogs",
-    "c:\\recovery", "c:\\$recycle.bin", "c:\\system volume information",
+    _DRIVE, f"{_DRIVE}\\windows", f"{_DRIVE}\\program files",
+    f"{_DRIVE}\\program files (x86)", f"{_DRIVE}\\programdata",
+    f"{_DRIVE}\\users", f"{_DRIVE}\\users\\public", f"{_DRIVE}\\perflogs",
+    f"{_DRIVE}\\recovery", f"{_DRIVE}\\$recycle.bin",
+    f"{_DRIVE}\\system volume information",
 }
 PROTECTED_SUBSTR = (
     "\\windows\\winsxs", "\\windows\\system32", "\\windows\\syswow64",
     "\\windows\\servicing", "\\windows\\assembly",
 )
+_WINDOWS_ROOT = f"{_DRIVE}\\windows"
 
 
 def validate(src: str, dst_root: str, *, allow_system: bool = False) -> tuple[bool, list[str], list[str]]:
@@ -56,8 +61,8 @@ def validate(src: str, dst_root: str, *, allow_system: bool = False) -> tuple[bo
     for sub in PROTECTED_SUBSTR:
         if sub in lowered:
             errors.append(f"该目录属于系统核心组件（{sub}），禁止迁移。")
-    if lowered.startswith("c:\\windows") and not allow_system:
-        warnings.append("目标位于 Windows 目录内，可能导致系统更新失败，请谨慎操作。")
+    if path_in(src, _WINDOWS_ROOT) and not allow_system:
+        warnings.append("源目录位于 Windows 目录内，迁移可能导致系统更新或组件失效，请谨慎操作。")
 
     if is_reparse_point(src):
         errors.append("该路径已经是一个联接/符号链接，无需再次迁移。")
@@ -171,106 +176,123 @@ def execute(
     if lexists(dst):
         raise RuntimeError(f"目标已存在：{dst}")
 
-    # 1) measure ---------------------------------------------------------
-    emit(2, "正在计算目录大小…")
-    if os.path.isdir(src) and not is_reparse_point(src):
-        total, files = dir_size(src)
-    else:
-        total, files = os.path.getsize(long_path(src)), 1
-    result["size_bytes"], result["files"] = total, files
+    # Journal the migration before touching anything: a crash or a killed
+    # process must leave a visible record instead of an orphaned copy that
+    # nobody knows about. The record is completed (or marked failed) below.
+    record = journal.add({
+        "action": action, "src": src, "dst": dst, "label": result["label"],
+        "status": "running", "started": started, "reverted": False,
+        "size_bytes": 0, "files": 0,
+    })
+    result["id"] = record["id"]
 
-    # 2) registry backup -------------------------------------------------
-    entries: list[dict] = []
-    if update_registry:
-        emit(5, "正在检索注册表中的路径引用…")
-        entries = registry.find_references(src, max_seconds=30, cancel=cancel)
-        result["registry_entries"] = entries
-        if entries:
-            emit(7, f"发现 {len(entries)} 处注册表引用，正在备份…")
-            try:
-                result["registry_backup"] = registry.backup_keys(
-                    {e["key_path"] for e in entries}, tag=sanitize_name(os.path.basename(src))
-                )
-            except Exception as exc:  # noqa: BLE001
-                result["warnings"].append(f"注册表备份失败：{exc}")
-
-    # 3) copy ------------------------------------------------------------
-    if os.path.isdir(src):
-        emit(10, f"正在复制到 {dst} …")
-
-        def on_progress(cp: winutil.CopyProgress) -> None:
-            emit(10 + cp.percent * 0.65, cp.message,
-                 done_bytes=cp.done_bytes, total_bytes=cp.total_bytes, speed=cp.speed)
-
-        ok, err = winutil.copy_tree(src, dst, report=on_progress, cancel=cancel,
-                                    min_free_bytes=int(total * 1.02))
-        if not ok:
-            raise RuntimeError(err)
-    else:
-        emit(30, f"正在复制文件到 {dst} …")
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy2(long_path(src), long_path(dst))
-
-    # 4) verify ----------------------------------------------------------
-    emit(78, "正在校验复制结果…")
-    if os.path.isdir(dst):
-        dst_total, dst_files = dir_size(dst)
-        if dst_files < files:
-            raise RuntimeError(f"校验失败：目标文件数 {dst_files} 少于源文件数 {files}")
-        if total and abs(dst_total - total) > max(4096, total * 0.001):
-            raise RuntimeError(f"校验失败：大小不一致（源 {human_size(total)} / 目标 {human_size(dst_total)}）")
-        if verify_hash:
-            emit(82, "正在比对文件指纹…")
-            _, _, h1 = fingerprint(src)
-            _, _, h2 = fingerprint(dst)
-            if h1 != h2:
-                raise RuntimeError("校验失败：内容指纹不一致")
-        result["verified"] = True
-    else:
-        if os.path.getsize(long_path(dst)) != os.path.getsize(long_path(src)):
-            raise RuntimeError("校验失败：文件大小不一致")
-        result["verified"] = True
-
-    # 5) remove source + create junction ---------------------------------
-    if clean_source:
-        emit(86, "正在删除源目录…")
-        was_dir = os.path.isdir(src) and not is_reparse_point(src)
-        ok, err = winutil.delete_tree(src) if was_dir else _remove_file(src)
-        if not ok:
-            result["warnings"].append(f"源目录删除不完整：{err}")
-        if link and not os.path.exists(src):
-            emit(90, "正在创建链接…" if not was_dir else "正在创建目录联接…")
-            if was_dir:
-                ok, err = winutil.create_junction(src, dst)
-            else:
-                ok, err = winutil.create_symlink(src, dst)
-            if ok:
-                result["link"] = True
-            else:
-                result["warnings"].append(
-                    f"链接创建失败，应用或快捷方式可能需要重新指向：{err}"
-                )
-
-    # 6) registry + shortcuts --------------------------------------------
-    if update_registry and entries:
-        emit(94, f"正在同步 {len(entries)} 处注册表引用…")
-        changed, errs = registry.rewrite_references(entries, src, dst)
-        result["registry_changed"] = changed
-        if errs:
-            result["warnings"].extend(errs[:10])
-
-    # 7) shortcuts --------------------------------------------------------
-    emit(97, "正在更新快捷方式…")
     try:
-        result["shortcuts"] = winutil.update_shortcuts(src, dst)
-    except Exception as exc:  # noqa: BLE001
-        result["warnings"].append(f"快捷方式更新失败：{exc}")
+        # 1) measure -----------------------------------------------------
+        emit(2, "正在计算目录大小…")
+        if os.path.isdir(src) and not is_reparse_point(src):
+            total, files = dir_size(src)
+        else:
+            total, files = os.path.getsize(long_path(src)), 1
+        result["size_bytes"], result["files"] = total, files
 
-    result.update({"seconds": round(time.time() - started, 1), "status": "done"})
-    emit(100, "迁移完成")
-    registry.clear_cache()
-    journal.add(result)
-    return result
+        # 2) registry backup ---------------------------------------------
+        entries: list[dict] = []
+        if update_registry:
+            emit(5, "正在检索注册表中的路径引用…")
+            entries = registry.find_references(src, max_seconds=30, cancel=cancel)
+            result["registry_entries"] = entries
+            if entries:
+                emit(7, f"发现 {len(entries)} 处注册表引用，正在备份…")
+                try:
+                    result["registry_backup"] = registry.backup_keys(
+                        {e["key_path"] for e in entries}, tag=sanitize_name(os.path.basename(src))
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    result["warnings"].append(f"注册表备份失败：{exc}")
+
+        # 3) copy --------------------------------------------------------
+        if os.path.isdir(src):
+            emit(10, f"正在复制到 {dst} …")
+
+            def on_progress(cp: winutil.CopyProgress) -> None:
+                emit(10 + cp.percent * 0.65, cp.message,
+                     done_bytes=cp.done_bytes, total_bytes=cp.total_bytes, speed=cp.speed)
+
+            ok, err = winutil.copy_tree(src, dst, report=on_progress, cancel=cancel,
+                                        min_free_bytes=int(total * 1.02))
+            if not ok:
+                raise RuntimeError(err)
+        else:
+            emit(30, f"正在复制文件到 {dst} …")
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(long_path(src), long_path(dst))
+
+        # 4) verify ------------------------------------------------------
+        emit(78, "正在校验复制结果…")
+        if os.path.isdir(dst):
+            dst_total, dst_files = dir_size(dst)
+            if dst_files < files:
+                raise RuntimeError(f"校验失败：目标文件数 {dst_files} 少于源文件数 {files}")
+            if total and abs(dst_total - total) > max(4096, total * 0.001):
+                raise RuntimeError(
+                    f"校验失败：大小不一致（源 {human_size(total)} / 目标 {human_size(dst_total)}）"
+                )
+            if verify_hash:
+                emit(82, "正在比对文件指纹…")
+                _, _, h1 = fingerprint(src)
+                _, _, h2 = fingerprint(dst)
+                if h1 != h2:
+                    raise RuntimeError("校验失败：内容指纹不一致")
+            result["verified"] = True
+        else:
+            if os.path.getsize(long_path(dst)) != os.path.getsize(long_path(src)):
+                raise RuntimeError("校验失败：文件大小不一致")
+            result["verified"] = True
+
+        # 5) remove source + create junction -----------------------------
+        if clean_source:
+            emit(86, "正在删除源目录…")
+            was_dir = os.path.isdir(src) and not is_reparse_point(src)
+            ok, err = winutil.delete_tree(src) if was_dir else _remove_file(src)
+            if not ok:
+                result["warnings"].append(f"源目录删除不完整：{err}")
+            if link and not os.path.exists(src):
+                emit(90, "正在创建链接…" if not was_dir else "正在创建目录联接…")
+                if was_dir:
+                    ok, err = winutil.create_junction(src, dst)
+                else:
+                    ok, err = winutil.create_symlink(src, dst)
+                if ok:
+                    result["link"] = True
+                else:
+                    result["warnings"].append(
+                        f"链接创建失败，应用或快捷方式可能需要重新指向：{err}"
+                    )
+
+        # 6) registry + shortcuts ----------------------------------------
+        if update_registry and entries:
+            emit(94, f"正在同步 {len(entries)} 处注册表引用…")
+            changed, errs = registry.rewrite_references(entries, src, dst)
+            result["registry_changed"] = changed
+            if errs:
+                result["warnings"].extend(errs[:10])
+
+        # 7) shortcuts ----------------------------------------------------
+        emit(97, "正在更新快捷方式…")
+        try:
+            result["shortcuts"] = winutil.update_shortcuts(src, dst)
+        except Exception as exc:  # noqa: BLE001
+            result["warnings"].append(f"快捷方式更新失败：{exc}")
+
+        result.update({"seconds": round(time.time() - started, 1), "status": "done"})
+        emit(100, "迁移完成")
+        registry.clear_cache()
+        journal.update(record["id"], **result)
+        return result
+    except BaseException as exc:
+        journal.update(record["id"], status="failed", error=str(exc) or type(exc).__name__,
+                       seconds=round(time.time() - started, 1))
+        raise
 
 
 def _remove_file(path: str) -> tuple[bool, str]:
@@ -295,6 +317,8 @@ def revert(record: dict, *, report: Optional[Callable[[float, str, dict], None]]
         raise RuntimeError("迁移记录不完整，无法还原")
     if record.get("reverted"):
         raise RuntimeError("该记录已经还原过了")
+    if record.get("status") == "running":
+        raise RuntimeError("该迁移仍在进行中，请等待任务结束后再还原")
     if not os.path.exists(dst):
         raise RuntimeError(f"迁移后的数据已不存在：{dst}")
 
@@ -344,7 +368,11 @@ def revert(record: dict, *, report: Optional[Callable[[float, str, dict], None]]
         _t, orig_files = dir_size(src)
         if orig_files == 0 and record.get("files"):
             raise RuntimeError("还原校验失败：目标位置为空")
-        winutil.delete_tree(dst)
+        ok, err = winutil.delete_tree(dst)
+        if not ok:
+            # Data is already back at the source; a leftover copy is preferable
+            # to losing the record, so note it instead of failing the revert.
+            notes.append(f"目标位置未能完全删除，可稍后手动清理：{err}")
     else:
         _remove_file(dst)
 
@@ -360,6 +388,8 @@ def revert(record: dict, *, report: Optional[Callable[[float, str, dict], None]]
 
 def rollback_last() -> Optional[dict]:
     for rec in journal.all_records():
-        if rec.get("action") in ("move_file", "move_dir", "move_app") and not rec.get("reverted"):
+        if (rec.get("action") in ("move_file", "move_dir", "move_app")
+                and not rec.get("reverted")
+                and rec.get("status", "done") == "done"):
             return revert(rec)
     return None

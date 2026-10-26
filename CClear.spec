@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec: build a single-file, windowed CClear.exe.
+"""PyInstaller spec: build a single-file, windowed CClear-backend.exe.
 
     python -m PyInstaller --noconfirm --clean CClear.spec
 
@@ -10,16 +10,13 @@ resulting exe behaves like a native desktop program and never opens a browser.
 import os
 
 APP_NAME = "CClear"
-ICON = os.path.join("app", "web", "CClear.ico")
+ICON = "CClear.ico"
 
 a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[
-        ("app/web", "app/web"),
-        (ICON, "app/web"),
-    ],
+    datas=[],
     hiddenimports=[
         # uvicorn resolves its loop/protocol implementations dynamically
         "uvicorn.logging",
@@ -70,7 +67,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name=APP_NAME,
+    name=APP_NAME + "-backend",   # 后端进程名与应用壳 CClear.exe 区分开
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -78,6 +75,7 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,          # GUI program: no console window
+    uac_admin=True,         # require admin: cleaning needs elevated rights
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

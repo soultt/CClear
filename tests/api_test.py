@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 # Windows consoles default to GBK; make sure Chinese output and check marks never
@@ -63,8 +64,6 @@ for asset in ("/", "/static/style.css", "/static/app.js"):
         check(f"GET {asset}", r.status == 200 and len(r.read()) > 100)
 
 print("\n[1b] 网页内目录选择器")
-import urllib.parse
-
 root = call("/api/fs/dirs?path=")
 check("GET /api/fs/dirs 根节点", len(root["drives"]) >= 1 and root["path"] == "")
 drive = root["drives"][0]["letter"] + "\\"

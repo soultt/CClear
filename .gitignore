@@ -8,3 +8,4 @@ dist/
 !CClear.spec
 .CClear/
 *.log
+node_modules/

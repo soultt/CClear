@@ -12,7 +12,7 @@ import time
 from ctypes import wintypes
 from typing import Callable, Iterable, Optional
 
-from .util import human_size, long_path
+from .util import human_size, lexists, long_path
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -36,11 +36,18 @@ def relaunch_as_admin(extra_args: Optional[list[str]] = None) -> bool:
         return False
     if getattr(sys, "frozen", False):
         exe = sys.executable
-        params = subprocess.list2cmdline(list(extra_args or []))
+        args = list(extra_args or [])
     else:
+        # Dev mode: the backend is a console program, and relaunching it with
+        # python.exe would keep a black console window next to the elevated
+        # app. pythonw.exe runs the same interpreter without a console.
         exe = sys.executable
-        script = os.path.abspath(sys.argv[0])
-        params = subprocess.list2cmdline([script, *(extra_args or [])])
+        if os.path.basename(exe).lower() == "python.exe":
+            pythonw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+            if os.path.exists(pythonw):
+                exe = pythonw
+        args = [os.path.abspath(sys.argv[0]), *(extra_args or [])]
+    params = subprocess.list2cmdline(args)
     try:
         rc = ctypes.windll.shell32.ShellExecuteW(
             None, "runas", exe, params, os.path.dirname(os.path.abspath(sys.argv[0])), 1
@@ -174,10 +181,10 @@ def create_junction(link: str, target: str) -> tuple[bool, str]:
     """Create an NTFS directory junction. No admin rights required."""
     link = os.path.abspath(link)
     target = os.path.abspath(target)
-    if os.path.exists(link):
-            return False, f"链接位置已存在: {link}"
+    if lexists(link):
+        return False, f"链接位置已存在: {link}"
     if not os.path.isdir(target):
-            return False, f"目标目录不存在: {target}"
+        return False, f"目标目录不存在: {target}"
     try:
         os.makedirs(os.path.dirname(link), exist_ok=True)
     except OSError:
@@ -198,10 +205,10 @@ def create_symlink(link: str, target: str) -> tuple[bool, str]:
     """Create a file symbolic link (needs admin rights or Developer Mode)."""
     link = os.path.abspath(link)
     target = os.path.abspath(target)
-    if os.path.exists(link):
-            return False, f"链接位置已存在: {link}"
+    if lexists(link):
+        return False, f"链接位置已存在: {link}"
     if not os.path.exists(target):
-            return False, f"目标不存在: {target}"
+        return False, f"目标不存在: {target}"
     try:
         os.makedirs(os.path.dirname(link), exist_ok=True)
     except OSError:
@@ -323,7 +330,7 @@ class CopyProgress:
 
 def _iter_files_with_size(src: str) -> tuple[list[tuple[str, int, int]], int]:
     """[(src_file, rel, size)] and total size."""
-    from .util import dir_size, safe_iterdir
+    from .util import safe_iterdir
 
     items: list[tuple[str, int, int]] = []
     total = 0
@@ -363,8 +370,8 @@ def copy_tree(
     dst = os.path.abspath(dst)
     if not os.path.isdir(src):
         return False, f"源目录不存在: {src}"
-    if os.path.exists(dst):
-            return False, f"目标已存在: {dst}"
+    if lexists(dst):
+        return False, f"目标已存在: {dst}"
     from .util import free_space
 
     if min_free_bytes and free_space(dst) < min_free_bytes:
@@ -391,7 +398,6 @@ def _robocopy_tree(src, dst, robocopy, report, cancel) -> tuple[bool, str]:
         creationflags=_NO_WINDOW,
     )
     start = time.monotonic()
-    last = 0
     try:
         while proc.poll() is None:
             if cancel and cancel():
@@ -415,7 +421,6 @@ def _robocopy_tree(src, dst, robocopy, report, cancel) -> tuple[bool, str]:
                         speed_bps=speed,
                     )
                 )
-            last = done
             time.sleep(0.6)
     except Exception as exc:  # pragma: no cover
         try:
@@ -429,7 +434,7 @@ def _robocopy_tree(src, dst, robocopy, report, cancel) -> tuple[bool, str]:
         return False, f"复制失败 (robocopy {proc.returncode}): {err[:400]}"
     dst_total, dst_count = _count_tree(dst)
     if dst_count < len(items):
-            return False, f"复制不完整: {dst_count}/{len(items)} 个文件"
+        return False, f"复制不完整: {dst_count}/{len(items)} 个文件"
     if report:
         report(CopyProgress(path=dst, message="复制完成", percent=100.0,
                             done_bytes=dst_total, total_bytes=total))
@@ -466,7 +471,7 @@ def _python_copy_tree(src, dst, report, cancel) -> tuple[bool, str]:
     start = time.monotonic()
     for src_file, rel, size in items:
         if cancel and cancel():
-                return False, "已取消"
+            return False, "已取消"
         out = os.path.join(dst, rel)
         try:
             os.makedirs(long_path(os.path.dirname(out)), exist_ok=True)
@@ -506,7 +511,7 @@ def delete_tree(path: str) -> tuple[bool, str]:
         shutil.rmtree(long_path(path), onerror=onerror)
         return True, ""
     except OSError as exc:
-        proc = subprocess.run(
+        subprocess.run(
             ["cmd", "/c", "rd", "/s", "/q", path], capture_output=True, text=True,
             encoding="mbcs", errors="replace", creationflags=_NO_WINDOW,
         )

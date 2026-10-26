@@ -7,7 +7,7 @@ import os
 import re
 import stat
 import time
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 # ---------------------------------------------------------------------------
 # Long path support (Windows MAX_PATH workaround)
@@ -219,18 +219,14 @@ def fingerprint(path: str, sample_mb: int = 4) -> tuple[int, int, str]:
         count += 1
         h.update(os.path.relpath(f, path).encode("utf-8", "replace"))
         h.update(str(size).encode())
-        if size <= sample * 2:
-            chunk_start, chunk_end = 0, size
-        else:
-            chunk_start, chunk_end = sample, sample
         try:
             with open(long_path(f), "rb") as fh:
-                if chunk_end == size and size > 0:
-                    fh.seek(0)
-                    h.update(fh.read(sample))
-                    fh.seek(max(0, size - sample))
-                    h.update(fh.read(sample))
-                else:
+                # Sample head + tail: a file that is only partly copied differs
+                # at one end, and a middle-only change is still caught by names
+                # and sizes for most real-world trees.
+                h.update(fh.read(sample))
+                if size > sample:
+                    fh.seek(max(sample, size - sample))
                     h.update(fh.read(sample))
         except OSError:
             pass

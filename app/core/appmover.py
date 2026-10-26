@@ -5,13 +5,12 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import subprocess
 import time
 import winreg
 from typing import Callable, Iterable, Optional
 
 from . import journal, mover, registry, winutil
-from .util import dir_size, expand, human_size, is_reparse_point, long_path, path_in, safe_iterdir
+from .util import dir_size, expand, human_size, is_reparse_point, safe_iterdir
 
 UNINSTALL_KEYS = [
     ("HKLM", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", 64),

@@ -7,7 +7,7 @@ import os
 import threading
 import time
 import uuid
-from typing import Any, Optional
+from typing import Optional
 
 _DATA_DIR = os.path.join(
     os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "CClear"
@@ -87,7 +87,11 @@ def get(record_id: str) -> Optional[dict]:
 
 def stats() -> dict:
     records = _load()
-    migrated = [r for r in records if r.get("action") in ("move_file", "move_dir", "move_app")]
+    # ``running`` records are in-flight and ``failed`` ones never completed, so
+    # neither may count towards migrated/freed totals.
+    migrated = [r for r in records
+                if r.get("action") in ("move_file", "move_dir", "move_app")
+                and r.get("status", "done") == "done"]
     active = [r for r in migrated if not r.get("reverted")]
     return {
         "total": len(records),
