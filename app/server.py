@@ -470,6 +470,82 @@ def junk_preview(payload: dict = Body(...)) -> dict:
     return {"blocking": block, "admin": winutil.is_admin()}
 
 
+@app.post("/api/junk/browse")
+def junk_browse(payload: dict = Body(...)) -> dict:
+    """Browse files for a junk category or folder.
+    
+    - {path: "cat_id"} -> returns category preview (top-level folders/files)
+    - {folder: "path"} -> returns directory contents for drill-down
+    """
+    cat_id = payload.get("path")
+    folder_path = payload.get("folder")
+    
+    if cat_id:
+        # Category preview - use cached scan data if available
+        cached = _cache.get("junk", {})
+        cats = cached.get("categories", [])
+        cat = next((c for c in cats if c["id"] == cat_id), None)
+        if cat and cat.get("preview"):
+            return {
+                "id": cat["id"],
+                "name": cat["name"],
+                "desc": cat.get("desc", ""),
+                "risk": cat.get("risk", "safe"),
+                "size": cat.get("size", 0),
+                "preview": cat["preview"],
+            }
+        # Fallback: compute preview on-demand
+        cat_def = cleaner.CATEGORY_INDEX.get(cat_id)
+        if not cat_def:
+            raise HTTPException(404, f"Unknown category: {cat_id}")
+        preview_items = cleaner._category_file_items(cat_def, max_items=60)
+        return {
+            "id": cat_id,
+            "name": cat_def.get("name", cat_id),
+            "desc": cat_def.get("desc", ""),
+            "risk": cat_def.get("risk", "safe"),
+            "size": 0,
+            "preview": preview_items,
+        }
+    
+    if folder_path:
+        # Folder drill-down
+        from app.core.util import long_path, safe_iterdir, human_size, is_reparse_point
+        try:
+            entries = []
+            for entry in safe_iterdir(long_path(folder_path)):
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                    if is_dir and is_reparse_point(entry.path):
+                        continue
+                    size = 0
+                    if not is_dir:
+                        size = entry.stat(follow_symlinks=False).st_size
+                    elif not is_reparse_point(entry.path):
+                        from app.core.util import dir_size
+                        size, _ = dir_size(entry.path, budget_seconds=5)
+                    entries.append({
+                        "path": entry.path,
+                        "name": entry.name,
+                        "size": size,
+                        "human": human_size(size),
+                        "is_dir": is_dir,
+                    })
+                except OSError:
+                    continue
+            entries.sort(key=lambda x: (not x["is_dir"], -x["size"]))
+            return {
+                "folder": folder_path,
+                "entries": entries[:200],
+            }
+        except PermissionError:
+            raise HTTPException(403, "无权访问该文件夹")
+        except OSError as e:
+            raise HTTPException(404, f"文件夹不存在: {e}")
+    
+    raise HTTPException(400, "需要提供 path (分类ID) 或 folder (文件夹路径)")
+
+
 # ---------------------------------------------------------------------------
 # registry cleaner
 # ---------------------------------------------------------------------------

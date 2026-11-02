@@ -175,6 +175,69 @@ CATEGORIES: list[dict] = [
         ],
     ),
 
+    # ------------------------------------------------------------------ 应用缓存
+    _cat(
+        id="wechat_cache", name="微信缓存", group="应用缓存", icon="chat",
+        desc="微信 / Weixin 的聊天图片与视频缓存、临时文件和日志。不会删除聊天记录、"
+             "已接收的文件或收藏；清理后首次查看旧图片需要重新下载。",
+        processes=["WeChat.exe", "Weixin.exe"],
+        globs=[
+            # 微信 4.x（xwechat_files，默认在文档目录，也可能在用户目录）
+            rf"{Up}\Documents\xwechat_files\*\cache\*",
+            rf"{Up}\Documents\xwechat_files\*\temp\*",
+            rf"{Up}\xwechat_files\*\cache\*",
+            rf"{Up}\xwechat_files\*\temp\*",
+            # 微信 3.x（WeChat Files）
+            rf"{Up}\Documents\WeChat Files\*\FileStorage\Cache\*",
+            rf"{Up}\Documents\WeChat Files\*\FileStorage\Temp\*",
+            rf"{Up}\Documents\WeChat Files\All Users\FileStorage\Cache\*",
+            # 客户端日志与崩溃信息
+            rf"{Ra}\Tencent\WeChat\log\*",
+            rf"{Ra}\Tencent\xwechat\log\*",
+            rf"{Ra}\Tencent\xwechat\crashinfo\*",
+        ],
+    ),
+    _cat(
+        id="qq_cache", name="QQ 缓存", group="应用缓存", icon="chat",
+        desc="QQ / QQNT 的网页缓存、临时文件与日志。不会删除聊天记录、接收的文件和自定义表情。",
+        processes=["QQ.exe", "QQNT.exe", "QQScLauncher.exe"],
+        globs=[
+            # QQNT 全局数据目录
+            rf"{Up}\Documents\Tencent Files\nt_qq\global\nt_temp\*",
+            rf"{Up}\Documents\Tencent Files\nt_qq\global\nt_data\Log\*",
+            rf"{Up}\Documents\Tencent Files\nt_qq\global\nt_data\WeatherBgCache\*",
+            # QQNT 按账号
+            rf"{Up}\Documents\Tencent Files\*\AppWebCache\*",
+            rf"{Up}\Documents\Tencent Files\*\nt_qq\nt_temp\*",
+            rf"{Up}\Documents\Tencent Files\*\nt_qq\nt_data\log\*",
+            rf"{Up}\Documents\Tencent Files\*\nt_qq\nt_data\log-cache\*",
+            # 旧版 QQ
+            rf"{Ra}\Tencent\QQ\webkit_cache\*",
+            rf"{La}\Tencent\QQTempSys\*",
+        ],
+    ),
+    _cat(
+        id="appdata_junk", name="AppData 冗余文件", group="应用缓存", icon="folder",
+        desc="AppData 中各应用遗留的日志、崩溃报告、旧版安装包与图标缓存。"
+             "只匹配明确的冗余目录，不删除程序配置和用户数据。",
+        risk="caution",
+        remove=[
+            rf"{La}\Downloaded Installations",
+            rf"{La}\SquirrelTemp",
+            rf"{La}\Microsoft\Windows\Caches",
+        ],
+        globs=[
+            rf"{La}\Google\Update\Download\*",
+            rf"{La}\Microsoft\EdgeUpdate\Download\*",
+            rf"{La}\*\logs\*",
+            rf"{Ra}\*\logs\*",
+            rf"{La}\*\log\*",
+            rf"{Ra}\*\log\*",
+            rf"{La}\*\crashpad\*",
+            rf"{Ra}\*\crashpad\*",
+        ],
+    ),
+
     # ------------------------------------------------------------------ 开发缓存
     _cat(
         id="dev_temp", name="开发工具临时目录", group="开发缓存", icon="code",
@@ -257,6 +320,63 @@ def _targets(cat: dict) -> list[str]:
     return [t for t in targets if os.path.exists(t)]
 
 
+def _category_file_items(cat: dict, max_items: int = 60) -> list[dict]:
+    """List the deletable targets of a category for the in-app browser.
+
+    Each item is ``{path, size, human, is_dir, name}``. Folders are returned as
+    enterable directory rows (the UI can drill into them), standalone files are
+    returned with their size. This keeps the top level navigable instead of
+    flattening thousands of files into one list.
+    """
+    items: list[dict] = []
+    seen: set[str] = set()
+
+    def add(path: str, *, size: int | None = None, name: str | None = None) -> bool:
+        key = os.path.normcase(path)
+        if key in seen:
+            return False
+        seen.add(key)
+        try:
+            is_dir = os.path.isdir(path)
+        except OSError:
+            is_dir = False
+        if size is None:
+            if is_dir and not is_reparse_point(path):
+                size = dir_size(path, budget_seconds=8)[0]
+            elif is_dir:
+                size = 0
+            else:
+                try:
+                    size = os.path.getsize(long_path(path))
+                except OSError:
+                    size = 0
+        items.append({
+            "path": path,
+            "size": size,
+            "human": human_size(size),
+            "is_dir": is_dir,
+            "name": name or os.path.basename(path.rstrip("\\/")) or path,
+        })
+        return len(items) >= max_items
+
+    # Folders whose contents get emptied -> show the folder itself (enterable).
+    for folder in _expand_paths(cat.get("remove", [])):
+        if os.path.exists(folder) and add(folder):
+            return items
+
+    # Glob hits: directories stay enterable, files show their size.
+    for hit in _expand_globs(cat.get("globs", [])):
+        if os.path.exists(hit) and add(hit):
+            return items
+
+    # "paths" folders are also emptied -> show them as enterable rows.
+    for folder in _expand_paths(cat.get("paths", [])):
+        if os.path.isdir(folder) and add(folder):
+            return items
+
+    return items
+
+
 # ---------------------------------------------------------------------------
 # Scanning
 # ---------------------------------------------------------------------------
@@ -308,6 +428,16 @@ def scan(
                 count += c
                 items.append({"path": target, "size": s, "human": human_size(s)})
         items.sort(key=lambda x: -x["size"])
+        # Build an enterable preview for the in-app browser. Folder targets are
+        # shown as folder rows (the UI can drill into them) instead of being
+        # flattened into thousands of files. Special categories (recycle bin,
+        # component store) already provide their own item list.
+        if cat.get("mode") == "special":
+            preview = items[:60]
+        else:
+            preview_items = _category_file_items(cat, max_items=60)
+            preview = preview_items if preview_items else items[:60]
+        preview.sort(key=lambda x: (not x.get("is_dir", False), -x.get("size", 0)))
         results.append(
             {
                 "id": cat["id"],
@@ -323,6 +453,7 @@ def scan(
                 "size_human": human_size(size),
                 "count": count,
                 "items": items[:40],
+                "preview": preview,
             }
         )
         total += size

@@ -586,6 +586,7 @@ function junkCard(c) {
   const size = state.junk.sizes[c.id];
   const locked = c.admin && !state.overview.admin;
   const items = (c.items || []).slice(0, 6);
+  const browsable = ['appdata_junk', 'wechat_cache', 'qq_cache', 'dev_cache_heavy'].includes(c.id) && c.preview;
   return `<div class="junk-card ${on ? 'on' : ''} ${locked ? 'locked' : ''}" data-cat="${c.id}">
     <div class="junk-top">
       <div class="junk-icon">${icon(catIcon(c.icon), 'width:18px;height:18px')}</div>
@@ -596,7 +597,10 @@ function junkCard(c) {
         </div>
         ${items.length ? `<div class="junk-items">${items.map((i) => `<div title="${esc(i.path)}">${esc(i.path)}</div>`).join('')}</div>` : ''}
       </div>
-      <span class="check ${on ? 'on' : ''}" data-toggle="${c.id}"></span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span class="check ${on ? 'on' : ''}" data-toggle="${c.id}"></span>
+        ${browsable ? `<button class="btn sm" data-browse="${c.id}" title="浏览文件">${icon('folder-open')}</button>` : ''}
+      </div>
     </div>
     <div class="junk-desc">${esc(c.desc)}</div>
     <div class="junk-meta">
@@ -764,6 +768,116 @@ $('#btnJunkClean').onclick = () => {
     },
   });
 };
+
+/* =========================================================================
+   JUNK FILE BROWSER
+   ========================================================================= */
+
+const fileBrowser = { catId: null, name: '', desc: '', risk: 'safe', size: 0, stack: [] };
+
+async function browseJunkCategory(catId) {
+  const cat = state.junk.cats.find((c) => c.id === catId) || {};
+  fileBrowser.catId = catId;
+  fileBrowser.name = cat.name || catId;
+  fileBrowser.desc = cat.desc || '';
+  fileBrowser.risk = cat.risk || 'safe';
+  fileBrowser.size = cat.size || 0;
+  fileBrowser.stack = [];
+  try {
+    if (cat.preview) {
+      openFileBrowser({ preview: cat.preview });
+    } else {
+      const res = await api('/api/junk/browse', { path: catId });
+      openFileBrowser(res);
+    }
+  } catch (err) {
+    toast('加载文件列表失败', err.message, 'error');
+  }
+}
+
+/* 进入某个文件夹：调用后端列出目录内容，并压入导航栈 */
+async function browseFolderInto(path) {
+  try {
+    const res = await api('/api/junk/browse', { folder: path });
+    fileBrowser.stack.push(path);
+    openFileBrowser(res);
+  } catch (err) {
+    toast('无法打开文件夹', err.message, 'error');
+  }
+}
+
+/* 返回上一级（或根扫描列表） */
+async function browseFolderUp() {
+  fileBrowser.stack.pop();
+  if (!fileBrowser.stack.length) {
+    const cat = state.junk.cats.find((c) => c.id === fileBrowser.catId);
+    if (cat && cat.preview) { openFileBrowser({ preview: cat.preview }); return; }
+  }
+  const target = fileBrowser.stack[fileBrowser.stack.length - 1];
+  if (!target) { const cat = state.junk.cats.find((c) => c.id === fileBrowser.catId); if (cat) openFileBrowser({ preview: cat.preview || [] }); return; }
+  try {
+    const res = await api('/api/junk/browse', { folder: target });
+    openFileBrowser(res);
+  } catch (err) {
+    toast('无法返回上级', err.message, 'error');
+  }
+}
+
+function openFileBrowser(data) {
+  const entries = (data.preview || data.entries || []).slice(0, 200);
+  const inFolder = fileBrowser.stack.length > 0;
+  const currentPath = inFolder ? fileBrowser.stack[fileBrowser.stack.length - 1] : '';
+  const title = inFolder ? (currentPath.split('\\').pop() || currentPath) : fileBrowser.name;
+
+  const rows = entries.length > 0 ? entries.map(e => {
+    const iconType = e.is_dir ? 'folder' : 'file';
+    return `<div class="file-item" ${e.is_dir ? `data-dir="${esc(e.path)}"` : ''} data-path="${esc(e.path)}">
+      <span class="ico ${iconType}">${icon(iconType)}</span>
+      <div class="file-name" title="${esc(e.path)}">${esc(e.name)}${e.is_dir ? '' : ''}</div>
+      <div class="file-size">${e.is_dir ? '文件夹' : (e.human || bytes(e.size))}</div>
+      <div class="file-actions">
+        <button class="btn sm ghost" data-open="${esc(e.path)}" title="在资源管理器中打开">${icon('open')}</button>
+        ${e.is_dir ? `<button class="btn sm" data-enter="${esc(e.path)}" title="进入文件夹">${icon('arrow-right')}</button>` : ''}
+      </div>
+    </div>`;
+  }).join('') : '<div class="empty small" style="margin:0">该文件夹为空</div>';
+
+  openModal(`
+    <div class="modal-head" style="align-items:flex-start">
+      <h3 style="margin:0">${esc(title)}</h3>
+      <span class="badge ${fileBrowser.risk}">${RISK_TEXT[fileBrowser.risk] || fileBrowser.risk}</span>
+    </div>
+    <div class="modal-body">
+      ${inFolder ? '' : `<div style="font-size:13px;color:var(--text-dim);margin-bottom:12px;line-height:1.7">${esc(fileBrowser.desc)}</div>`}
+      ${inFolder ? `<div class="fb-crumb"><button class="btn sm ghost" id="fbUp">${icon('undo')}上一级</button><span class="mono nowrap" title="${esc(currentPath)}">${esc(currentPath)}</span></div>` : ''}
+      <div class="file-browser">
+        <div class="file-header">
+          <span class="ico folder">${icon('folder-open')}</span>
+          <span style="margin-left:8px;font-weight:500">${inFolder ? '目录内容' : '扫描结果'}（${entries.length} 项）</span>
+        </div>
+        <div class="file-list">${rows}</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close>关闭</button>
+    </div>
+  `);
+
+  $('[data-close]').onclick = closeModal;
+  const upBtn = $('#fbUp');
+  if (upBtn) upBtn.onclick = browseFolderUp;
+
+  $$('.file-item').forEach((row) => {
+    row.addEventListener('click', (e) => {
+      const enterBtn = e.target.closest('[data-enter]');
+      const openBtn = e.target.closest('[data-open]');
+      if (enterBtn) { browseFolderInto(enterBtn.dataset.enter); return; }
+      if (openBtn) { api('/api/reveal', { path: openBtn.dataset.open }); return; }
+      const dir = row.dataset.dir;
+      if (dir) browseFolderInto(dir);
+    });
+  });
+}
 
 /* =========================================================================
    REGISTRY CLEANER
