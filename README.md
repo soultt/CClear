@@ -71,7 +71,7 @@
 
 ### 直接下载（推荐）
 
-不需要 Python：从 [Releases](https://github.com/soultt/CClear/releases/latest) 下载 `CClear-Setup-*.exe`（安装包）或 `CClear.exe`（单文件，免安装），双击即可运行。
+不需要 Python：从 [Releases](https://github.com/soultt/CClear/releases/latest) 下载 `CClear-Setup-*.exe`（安装包），双击安装后运行。
 
 ### 环境要求
 
@@ -83,10 +83,8 @@
 | 方式 | 说明 |
 | --- | --- |
 | 双击 `CClear-Setup-*.exe` 安装后运行 | 安装包方式，推荐 |
-| 双击 `CClear.exe` | 单文件免安装，双击即用 |
-| 双击 `start.bat` | 以普通权限启动（开发模式），界面在独立窗口中打开 |
-| 双击 `start-admin.bat` | 以管理员权限启动（**推荐**，UAC 会弹窗） |
-| `python main.py --port 9000` | 命令行启动，默认端口 8765 |
+| 双击 `CClear.exe` | 单文件免安装版，双击即用 |
+| `python main.py` | 开发模式启动，后台服务运行，界面由 Electron 壳或 WebView2 打开 |
 | `python main.py --browser` | 使用系统默认浏览器打开界面 |
 | `python main.py --no-window` | 只启动后台服务，不打开界面 |
 | `python main.py --elevate` | 请求管理员权限后启动 |
@@ -122,9 +120,9 @@ python tests\api_test.py            :: HTTP API 全流程
 ```
 CClear/
 ├── main.py                 启动入口（独立窗口 / 端口探测 / 权限提升 / 日志）
-├── CClear.spec             PyInstaller 打包配置（单文件、无控制台）
+├── CClear.spec             PyInstaller 打包配置（单文件、无控制台、UAC 管理员）
 ├── CClear.ico              应用图标
-├── requirements.txt        Python 依赖
+├── requirements.txt        Python 依赖（fastapi、uvicorn、psutil）
 ├── LICENSE
 ├── packaging/hooks/        PyInstaller 钩子
 ├── app/
@@ -142,10 +140,8 @@ CClear/
 │   │   └── winutil.py      权限、磁盘、联接、robocopy 复制、快捷方式
 │   └── web/                前端图标
 ├── tests/                  冒烟测试与 API 测试
-├── start.bat               启动脚本（普通权限）
-├── start-admin.bat         启动脚本（管理员权限）
-├── build-exe.bat           打包后端
-└── build-electron.bat      打包 Electron 安装包
+├── build-exe.bat           打包后端脚本
+└── build-electron.bat      打包 Electron 安装包脚本
 ```
 
 ---
@@ -165,13 +161,10 @@ CClear/
 ## ❓ 常见问题
 
 * **组件存储清理 (DISM) 扫描出数字却"清理不动"？**
-  DISM 的 `/Online` 操作（分析、清理）**必须管理员权限**，普通权限下会直接返回错误码 `740`。请点击界面右上角「获取管理员权限」，在 UAC 提示中确认后程序会以管理员身份重新启动（也可以双击 `start-admin.bat`）。扫描出的数字是 `WinSxS` 目录大小（含大量硬链接），**并非可回收量**；以管理员身份启动后，本应用会改用 `DISM /AnalyzeComponentStore` 显示真实的"可回收组件"大小。
+  DISM 的 `/Online` 操作（分析、清理）**必须管理员权限**，普通权限下会直接返回错误码 `740`。请点击界面右上角「获取管理员权限」，在 UAC 提示中确认后程序会以管理员身份重新启动。扫描出的数字是 `WinSxS` 目录大小（含大量硬链接），**并非可回收量**；以管理员身份启动后，本应用会改用 `DISM /AnalyzeComponentStore` 显示真实的"可回收组件"大小。
 
 * **点击"浏览"没有反应/没有出现选择窗口？**
-  "浏览"使用**界面内自带的目录选择器**（可选盘符、逐级进入、双击打开文件夹、显示隐藏目录），不依赖 Windows 原生对话框。如果点击仍无反应，请关闭窗口后重新运行，或检查版本号。
-
-* **为什么有时候会用到系统窗口？**
-  `/api/pick/folder` 接口仍保留（可直接置顶的原生对话框），但界面按钮已不再使用它。
+  "浏览"使用界面内自带的目录选择器（可选盘符、逐级进入、双击打开文件夹、显示隐藏目录），不依赖 Windows 原生对话框。如果点击仍无反应，请关闭窗口后重新运行。
 
 ---
 
