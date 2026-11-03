@@ -622,6 +622,13 @@ function updateCleanButton() {
 
 $('#junkGrid').addEventListener('click', (e) => {
   if (pageLock.cleaner > 0) return;
+  // Handle browse button first (prevents card click from toggling selection)
+  const browseBtn = e.target.closest('[data-browse]');
+  if (browseBtn) {
+    e.stopPropagation();
+    browseJunkCategory(browseBtn.dataset.browse);
+    return;
+  }
   const card = e.target.closest('[data-cat]');
   if (!card) return;
   const id = card.dataset.cat;
