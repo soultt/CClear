@@ -9,3 +9,5 @@ dist/
 .CClear/
 *.log
 node_modules/
+electron/release/
+electron/dist/
