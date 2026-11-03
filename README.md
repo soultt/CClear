@@ -138,7 +138,7 @@ CClear/
 │   │   ├── journal.py      迁移日志与统计数据
 │   │   ├── util.py         路径/长路径/目录体积/指纹
 │   │   └── winutil.py      权限、磁盘、联接、robocopy 复制、快捷方式
-│   └── web/                前端图标
+│   └── renderer/           Electron 前端（HTML/CSS/JS）
 ├── tests/                  冒烟测试与 API 测试
 ├── build-exe.bat           打包后端脚本
 └── build-electron.bat      打包 Electron 安装包脚本
