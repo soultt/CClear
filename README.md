@@ -18,11 +18,12 @@
 
 ### 垃圾清理
 
-17+ 类清理规则：**15 类核心清理 + 3 组额外缓存**：
+**17+ 类清理规则**：15 类核心清理 + 3 组额外缓存，按「安全 → 注意 → 高级」风险分级：
 
 | 组别 | 清理项 | 风险等级 |
 |------|--------|----------|
 | 临时文件 | 用户临时文件、系统临时文件、崩溃转储、缩略图缓存 | safe |
+| 系统缓存 | Windows 更新缓存、传递优化缓存、Windows.old、组件存储 (DISM)、系统日志、Prefetch | caution/advanced |
 | 隐私清理 | 回收站、最近使用记录、浏览器上网缓存 (系统) | safe |
 | 浏览器 | Chrome、Edge、Firefox、其他浏览器缓存 | safe |
 | 应用缓存 | 微信缓存、QQ 缓存、AppData 冗余文件 | caution |
@@ -32,7 +33,7 @@
 
 ### 注册表清理（独立页面）
 
-9 类注册表残留检查：失效的用户/系统启动项、App Paths、SharedDLLs、字体注册、最近打开记录、用户/系统卸载信息、失效的 COM 组件。项目按「安全 → 注意 → 高级」分区排列，默认勾选安全项。
+9 类注册表残留检查：失效的用户/系统启动项、App Paths、SharedDLLs、字体注册、最近打开记录、用户/系统卸载信息、失效的 COM 组件。项目按「安全 → 注意 → 高级」分区排列，默认勾选安全项。清理前会逐项导出备份（`%LOCALAPPDATA%\CClear\backups\regclean-*`），建议先创建系统还原点。
 
 ### 大文件转移
 
@@ -84,7 +85,7 @@
 | --- | --- |
 | 双击 `CClear-Setup-*.exe` 安装后运行 | 安装包方式，推荐 |
 | 双击 `CClear.exe` | 单文件免安装版，双击即用 |
-| `python main.py` | 开发模式启动，后台服务运行，界面由 Electron 壳或 WebView2 打开 |
+| `python main.py` | 开发模式启动，后台服务运行，界面由 Electron 壳打开 |
 | `python main.py --browser` | 使用系统默认浏览器打开界面 |
 | `python main.py --no-window` | 只启动后台服务，不打开界面 |
 | `python main.py --elevate` | 请求管理员权限后启动 |
@@ -111,6 +112,7 @@ build-electron.bat          :: 打包 Electron 安装包 CClear-Setup-*.exe
 python tests\smoke_test.py          :: 核心引擎（真实执行一次迁移+还原）
 python main.py --no-window --port 8791
 python tests\api_test.py            :: HTTP API 全流程
+python tests\unit_test.py           :: 单元检查（临时目录，无副作用）
 ```
 
 ---
@@ -127,8 +129,9 @@ CClear/
 ├── packaging/hooks/        PyInstaller 钩子
 ├── app/
 │   ├── server.py           FastAPI 路由与作业调度
+│   ├── web/                静态前端资源（HTML/CSS/JS，由 Electron 加载）
 │   ├── core/
-│   │   ├── cleaner.py      清理规则库与执行器
+│   │   ├── cleaner.py      清理规则库与执行器（17+ 类别）
 │   │   ├── scanner.py      大文件扫描、目录热点分析
 │   │   ├── mover.py        迁移引擎（复制→校验→联接→回滚）
 │   │   ├── registry.py     注册表检索 / 备份 / 改写
@@ -138,8 +141,17 @@ CClear/
 │   │   ├── journal.py      迁移日志与统计数据
 │   │   ├── util.py         路径/长路径/目录体积/指纹
 │   │   └── winutil.py      权限、磁盘、联接、robocopy 复制、快捷方式
-│   └── renderer/           Electron 前端（HTML/CSS/JS）
-├── tests/                  冒烟测试与 API 测试
+│   └── __init__.py
+├── electron/
+│   ├── main.js             Electron 主进程（壳层、后端管理、托盘）
+│   ├── preload.js          渲染层桥接
+│   ├── renderer/           前端页面
+│   │   ├── index.html
+│   │   ├── app.js
+│   │   └── style.css
+│   ├── package.json
+│   └── selftest.js
+├── tests/                  冒烟测试、API 测试、单元测试
 ├── build-exe.bat           打包后端脚本
 └── build-electron.bat      打包 Electron 安装包脚本
 ```
@@ -180,4 +192,4 @@ CClear/
 
 MIT © 2026 soul yu — 详见 [LICENSE](LICENSE)。
 
-项目地址：<https://github.com/soultt/CClear>（欢迎 fork、提交 issue 与 PR）.
+项目地址：<https://github.com/soultt/CClear>（欢迎 fork、提交 issue 与 PR）。
