@@ -1,46 +1,34 @@
 @echo off
-chcp 65001 >nul
 cd /d "%~dp0"
-title CClear - 打包 Electron 安装包
+chcp 65001 >nul
 
-where node >nul 2>nul
+REM 构建 NSIS 安装包（安装版）
+echo [1/2] 正在构建安装版...
+npx electron-builder --win nsis --publish never
 if errorlevel 1 (
-  echo [错误] 未检测到 Node.js，请先安装 Node.js 18+ 并加入 PATH。
-  pause
-  exit /b 1
-)
-
-rem electron-builder 的 extraResources 依赖 PyInstaller 产出的后端
-if not exist dist\CClear-backend.exe (
-  echo [错误] 未找到 dist\CClear-backend.exe，请先运行 build-exe.bat 打包后端。
-  pause
-  exit /b 1
-)
-
-cd electron
-if not exist node_modules (
-  echo 首次运行，正在安装 Electron 依赖...
-  call npm install
-  if errorlevel 1 (
-    echo 依赖安装失败。
-    cd ..
-    pause
+    echo 安装版构建失败
     exit /b 1
-  )
 )
 
-echo 正在打包 Electron 安装包 ...
-call npm run dist
+REM 构建便携版（覆盖同名文件前先删除旧的）
+echo [2/2] 正在构建便携版...
+del /f /q "dist\CClear-Portable-1.4.0.exe" 2>nul
+npx electron-builder --win portable --publish never
 if errorlevel 1 (
-  echo.
-  echo 打包失败，请查看上面的错误信息。
-  cd ..
-  pause
-  exit /b 1
+    echo 便携版构建失败
+    exit /b 1
 )
 
-cd ..
+REM 将便携 exe 重命名为 zip（兼容旧格式）
+echo 正在打包便携版 zip...
+powershell -NoProfile -Command "Compress-Archive -Path 'dist\win-unpacked\CClear.exe','dist\win-unpacked\resources' -DestinationPath 'dist\CClear-Portable-1.4.0.zip' -Force"
+if errorlevel 1 (
+    echo 便携版 zip 打包失败
+    exit /b 1
+)
+
 echo.
-echo 打包完成: electron\dist\CClear-Setup-*.exe
-echo 双击安装，桌面与开始菜单会创建快捷方式。
+echo 构建完成:
+echo   安装版: dist\CClear-Setup-1.4.0.exe
+echo   便携版: dist\CClear-Portable-1.4.0.zip
 pause

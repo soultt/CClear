@@ -312,11 +312,16 @@ def _targets(cat: dict) -> list[str]:
     """Everything the category would delete."""
     targets: list[str] = []
     for folder in _expand_paths(cat.get("paths", [])):
-        if os.path.isdir(folder):
+        if os.path.isdir(folder) and not is_reparse_point(folder):
             for entry in safe_iterdir(folder):
-                targets.append(entry.path)
-    targets.extend(_expand_paths(cat.get("remove", [])))
-    targets.extend(_expand_globs(cat.get("globs", [])))
+                if not is_reparse_point(entry.path):
+                    targets.append(entry.path)
+    for p in _expand_paths(cat.get("remove", [])):
+        if not is_reparse_point(p):
+            targets.append(p)
+    for p in _expand_globs(cat.get("globs", [])):
+        if not is_reparse_point(p):
+            targets.append(p)
     return [t for t in targets if os.path.exists(t)]
 
 
@@ -337,7 +342,7 @@ def _category_file_items(cat: dict, max_items: int = 60) -> list[dict]:
             return False
         seen.add(key)
         try:
-            is_dir = os.path.isdir(path)
+            is_dir = os.path.isdir(path) and not is_reparse_point(path)
         except OSError:
             is_dir = False
         if size is None:
@@ -361,17 +366,17 @@ def _category_file_items(cat: dict, max_items: int = 60) -> list[dict]:
 
     # Folders whose contents get emptied -> show the folder itself (enterable).
     for folder in _expand_paths(cat.get("remove", [])):
-        if os.path.exists(folder) and add(folder):
+        if os.path.exists(folder) and not is_reparse_point(folder) and add(folder):
             return items
 
     # Glob hits: directories stay enterable, files show their size.
     for hit in _expand_globs(cat.get("globs", [])):
-        if os.path.exists(hit) and add(hit):
+        if os.path.exists(hit) and not is_reparse_point(hit) and add(hit):
             return items
 
     # "paths" folders are also emptied -> show them as enterable rows.
     for folder in _expand_paths(cat.get("paths", [])):
-        if os.path.isdir(folder) and add(folder):
+        if os.path.isdir(folder) and not is_reparse_point(folder) and add(folder):
             return items
 
     return items
