@@ -106,8 +106,44 @@ a:hover { text-decoration: underline; }
 
 .content {
   flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden;
-  padding: 26px 30px 96px;
+  /* 顶部不要 padding：sticky 元素会被这条 padding 顶住，滚动时上面留一条透明槽 */
+  padding: 0 30px 96px;
   scroll-behavior: smooth;
+}
+
+/* 总览页没有 page-head，单独给顶部间距 */
+#page-overview { padding-top: 26px; }
+
+/* 普通页面：标题与内容区顶部保持原间距（放在内容流里，而不是滚动容器 padding 上） */
+.content > .page > .page-head { margin-top: 26px; }
+
+/* 垃圾清理 / 注册表清理：标题 + 筛选行整体固定，背景不透明 */
+#page-cleaner > .sticky-top,
+#page-registry > .sticky-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  margin: 0 -30px 26px;   /* 横向铺满内容区，固定时左右不留缝 */
+  padding: 0 30px;
+}
+
+#page-cleaner > .sticky-top > .page-head,
+#page-registry > .sticky-top > .page-head {
+  margin: 0;
+  padding: 22px 0 12px;
+  background: var(--bg);
+}
+
+#page-cleaner > .sticky-top > .sticky-filter,
+#page-registry > .sticky-top > .sticky-filter {
+  margin: 0;
+}
+
+#page-cleaner > .sticky-top .card,
+#page-registry > .sticky-top .card {
+  border-radius: 0 0 var(--radius) var(--radius);
+  border-top: none;
 }
 .content > .page { display: none; }
 .content > .page.active { display: block; animation: pageIn 0.22s ease; }
@@ -118,19 +154,13 @@ a:hover { text-decoration: underline; }
 
 /* =========================================================================
    页面标题区（内容流内，不是横栏）
-   - #page-cleaner、#page-registry：头部固定+背景不透明
+   - #page-cleaner、#page-registry：sticky-top 整体固定+背景不透明（见上方规则）
    - #page-large/#page-dir/#page-apps/#page-journal：表格表头固定
    - #page-settings/#page-about：不固定
    ========================================================================= */
 .page-head {
   display: flex; align-items: flex-end; justify-content: space-between;
-  gap: 16px; margin: 2px 2px 16px;
-}
-
-/* 垃圾清理和注册表清理页面头部固定，背景不透明 */
-#page-cleaner .page-head,
-#page-registry .page-head {
-  position: sticky; top: 0; z-index: 5; background: var(--panel);
+  gap: 16px; margin: 0;
 }
 
 /* 其他涉及表格的页面的表格表头固定 */
