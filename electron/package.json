@@ -1,6 +1,6 @@
 {
   "name": "cclear-electron",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "private": true,
   "description": "CClear · C 盘空间管家（Electron 窗口壳）",
   "main": "main.js",

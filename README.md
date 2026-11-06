@@ -184,7 +184,7 @@ CClear/
 
 如果这个项目对你有帮助，欢迎请作者喝杯咖啡 ☕
 
-[在爱发电赞助](https://afdian.com/a/yhbsoul)
+[感谢您的咖啡☕](https://afdian.com/a/yhbsoul)
 
 ---
 
