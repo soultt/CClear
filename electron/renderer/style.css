@@ -116,12 +116,35 @@ a:hover { text-decoration: underline; }
   to { opacity: 1; transform: none; }
 }
 
-/* 页面标题区（内容流内，不是横栏） */
+/* =========================================================================
+   页面标题区（内容流内，不是横栏）
+   - #page-cleaner、#page-registry：头部固定+背景不透明
+   - #page-large/#page-dir/#page-apps/#page-journal：表格表头固定
+   - #page-settings/#page-about：不固定
+   ========================================================================= */
 .page-head {
   display: flex; align-items: flex-end; justify-content: space-between;
   gap: 16px; margin: 2px 2px 16px;
-  position: sticky; top: 0; z-index: 5;
-  background: var(--bg);
+}
+
+/* 垃圾清理和注册表清理页面头部固定，背景不透明 */
+#page-cleaner .page-head,
+#page-registry .page-head {
+  position: sticky; top: 0; z-index: 5; background: var(--panel);
+}
+
+/* 其他涉及表格的页面的表格表头固定 */
+#page-large table th,
+#page-dir table th,
+#page-apps table th,
+#page-journal table th {
+  position: sticky; top: 0; z-index: 5; background: var(--panel);
+}
+
+/* 其他页面不固定头部 */
+#page-settings .page-head,
+#page-about .page-head {
+  position: static;
 }
 .page-head h1 { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: 0.2px; }
 .page-head p { margin: 3px 0 0; color: var(--text-mute); font-size: 12.5px; }
