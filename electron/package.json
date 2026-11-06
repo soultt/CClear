@@ -38,8 +38,7 @@
       "icon": "../CClear.ico",
       "requestedExecutionLevel": "requireAdministrator",
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ]
     },
     "nsis": {
