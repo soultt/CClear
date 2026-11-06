@@ -120,6 +120,8 @@ a:hover { text-decoration: underline; }
 .page-head {
   display: flex; align-items: flex-end; justify-content: space-between;
   gap: 16px; margin: 2px 2px 16px;
+  position: sticky; top: 0; z-index: 5;
+  background: var(--bg);
 }
 .page-head h1 { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: 0.2px; }
 .page-head p { margin: 3px 0 0; color: var(--text-mute); font-size: 12.5px; }
