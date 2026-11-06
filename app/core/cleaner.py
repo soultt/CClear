@@ -13,6 +13,23 @@ from typing import Callable, Iterable, Optional
 
 from .util import dir_size, expand, human_size, is_reparse_point, long_path, safe_iterdir
 
+
+def _path_skips_reparse_point(path: str) -> bool:
+    """Return True if none of the path components is a symlink/junction/mount point.
+
+    This prevents deleting things that live behind a junction — e.g.
+    ``C:\\Users\\new\\.gradle\\caches`` where ``.gradle`` itself is a junction.
+    """
+    cur = ""
+    parts = path.split(os.sep)
+    for part in parts:
+        if not part:
+            continue
+        cur = os.path.join(cur, part) if cur else part
+        if is_reparse_point(cur):
+            return False
+    return True
+
 La = "%LOCALAPPDATA%"
 Ra = "%APPDATA%"
 Up = "%USERPROFILE%"
@@ -317,11 +334,13 @@ def _targets(cat: dict) -> list[str]:
                 if not is_reparse_point(entry.path):
                     targets.append(entry.path)
     for p in _expand_paths(cat.get("remove", [])):
-        if not is_reparse_point(p):
-            targets.append(p)
+        if not _path_skips_reparse_point(p):
+            continue
+        targets.append(p)
     for p in _expand_globs(cat.get("globs", [])):
-        if not is_reparse_point(p):
-            targets.append(p)
+        if not _path_skips_reparse_point(p):
+            continue
+        targets.append(p)
     return [t for t in targets if os.path.exists(t)]
 
 
@@ -346,10 +365,10 @@ def _category_file_items(cat: dict, max_items: int = 60) -> list[dict]:
         except OSError:
             is_dir = False
         if size is None:
-            if is_dir and not is_reparse_point(path):
+            if is_dir and not _path_skips_reparse_point(path):
+                return False  # parent in path is a junction/symlink, skip entirely
+            if is_dir:
                 size = dir_size(path, budget_seconds=8)[0]
-            elif is_dir:
-                size = 0
             else:
                 try:
                     size = os.path.getsize(long_path(path))
@@ -366,17 +385,17 @@ def _category_file_items(cat: dict, max_items: int = 60) -> list[dict]:
 
     # Folders whose contents get emptied -> show the folder itself (enterable).
     for folder in _expand_paths(cat.get("remove", [])):
-        if os.path.exists(folder) and not is_reparse_point(folder) and add(folder):
+        if os.path.exists(folder) and not is_reparse_point(folder) and _path_skips_reparse_point(folder) and add(folder):
             return items
 
     # Glob hits: directories stay enterable, files show their size.
     for hit in _expand_globs(cat.get("globs", [])):
-        if os.path.exists(hit) and not is_reparse_point(hit) and add(hit):
+        if os.path.exists(hit) and not is_reparse_point(hit) and _path_skips_reparse_point(hit) and add(hit):
             return items
 
     # "paths" folders are also emptied -> show them as enterable rows.
     for folder in _expand_paths(cat.get("paths", [])):
-        if os.path.isdir(folder) and not is_reparse_point(folder) and add(folder):
+        if os.path.isdir(folder) and not is_reparse_point(folder) and _path_skips_reparse_point(folder) and add(folder):
             return items
 
     return items
