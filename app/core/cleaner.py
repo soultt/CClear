@@ -659,15 +659,50 @@ def _force_remove_tree(path: str) -> None:
 
 
 def recycle_bin_size() -> tuple[int, int]:
+    """Get total recycle bin size and item count across all drives using Windows Shell API.
+    
+    This uses SHQueryRecycleBinW which queries the Recycle Bin database directly,
+    avoiding filesystem permission issues when enumerating $Recycle.Bin directories.
+    """
     total = 0
     count = 0
-    for drive in _drive_letters():
-        for sub in (r"$Recycle.Bin", r"$RECYCLE.BIN"):
-            folder = os.path.join(drive + "\\", sub)
-            if os.path.isdir(folder):
-                s, c = dir_size(folder, budget_seconds=8)
-                total += s
-                count += c
+    if os.name != "nt":
+        return total, count
+    
+    try:
+        # SHQUERYRBINFO structure: cbSize (DWORD), i64Size (int64), i64NumItems (int64)
+        # Total size = 4 + 8 + 8 = 20 bytes (but aligned to 24 on 64-bit)
+        import ctypes
+        from ctypes import wintypes
+        
+        class SHQUERYRBINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("i64Size", ctypes.c_int64),
+                ("i64NumItems", ctypes.c_int64),
+            ]
+        
+        # Query each drive's recycle bin
+        for drive in _drive_letters():
+            root_path = drive + ":\\"
+            info = SHQUERYRBINFO()
+            info.cbSize = ctypes.sizeof(SHQUERYRBINFO)
+            
+            # SHQueryRecycleBinW returns HRESULT (0 = S_OK)
+            hr = ctypes.windll.shell32.SHQueryRecycleBinW(root_path, ctypes.byref(info))
+            if hr == 0:  # S_OK
+                total += info.i64Size
+                count += info.i64NumItems
+    except Exception:
+        # Fallback to filesystem scan if API fails
+        for drive in _drive_letters():
+            for sub in (r"$Recycle.Bin", r"$RECYCLE.BIN"):
+                folder = os.path.join(drive + "\\", sub)
+                if os.path.isdir(folder):
+                    s, c = dir_size(folder, budget_seconds=8)
+                    total += s
+                    count += c
+    
     return total, count
 
 
