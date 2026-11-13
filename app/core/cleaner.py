@@ -519,7 +519,15 @@ def clean(
         if cat.get("mode") == "special":
             special = cat.get("special")
             if special == "recycle":
-                ok, size = empty_recycle_bin()
+                # Calculate progress span for this category
+                base = (i / max(1, len(cats))) * 100
+                span = 100 / max(1, len(cats))
+                
+                def recycle_report(pct: float, msg: str):
+                    if report:
+                        report(base + span * pct / 100, msg)
+                
+                ok, size = empty_recycle_bin(report=recycle_report, cancel=cancel)
                 cat_freed += size if ok else 0
                 details.append({"category": cat["name"], "path": "回收站",
                                 "size": size, "ok": ok})
@@ -711,14 +719,69 @@ def _drive_letters() -> list[str]:
     return [chr(65 + i) for i in range(26) if (mask >> i) & 1]
 
 
-def empty_recycle_bin() -> tuple[bool, int]:
-    size, _ = recycle_bin_size()
+def empty_recycle_bin(
+    report: Optional[Callable[[float, str], None]] = None,
+    cancel: Optional[Callable[[], bool]] = None,
+) -> tuple[bool, int]:
+    """Empty recycle bins on all drives with optional progress reporting.
+    
+    Empties per-drive to allow progress updates for large recycle bins.
+    """
+    # First get total size across all drives (fast query via SHQueryRecycleBinW)
+    total_size = 0
+    drive_infos = []
+    for drive in _drive_letters():
+        root_path = drive + ":\\"
+        try:
+            import ctypes
+            from ctypes import wintypes
+            
+            class SHQUERYRBINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", wintypes.DWORD),
+                    ("i64Size", ctypes.c_int64),
+                    ("i64NumItems", ctypes.c_int64),
+                ]
+            
+            info = SHQUERYRBINFO()
+            info.cbSize = ctypes.sizeof(SHQUERYRBINFO)
+            hr = ctypes.windll.shell32.SHQueryRecycleBinW(root_path, ctypes.byref(info))
+            if hr == 0 and info.i64Size > 0:
+                drive_infos.append((drive, info.i64Size, info.i64NumItems))
+                total_size += info.i64Size
+        except Exception:
+            continue
+    
+    if not drive_infos:
+        return True, 0  # Nothing to clean
+    
+    # Empty each drive's recycle bin with progress
     flags = 0x00000001 | 0x00000002 | 0x00000004  # NOCONFIRMATION | NOPROGRESS | NOSOUND
-    try:
-        rc = ctypes.windll.shell32.SHEmptyRecycleBinW(None, None, flags)
-        return rc == 0, size
-    except Exception:
-        return False, size
+    all_ok = True
+    processed = 0
+    
+    for i, (drive, size, count) in enumerate(drive_infos):
+        if cancel and cancel():
+            return False, total_size
+        
+        if report:
+            pct = (i / len(drive_infos)) * 100
+            report(pct, f"正在清空 {drive} 盘回收站 ({human_size(size)}, {count} 项)...")
+        
+        root_path = drive + ":\\"
+        try:
+            rc = ctypes.windll.shell32.SHEmptyRecycleBinW(root_path, None, flags)
+            if rc != 0:
+                all_ok = False
+        except Exception:
+            all_ok = False
+        
+        processed += 1
+    
+    if report:
+        report(100, "回收站清空完成")
+    
+    return all_ok, total_size
 
 
 def winsxs_estimate() -> tuple[int, int]:
